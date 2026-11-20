@@ -1,0 +1,35 @@
+
+======================================================================
+1. LOAD LABELLED DATA
+======================================================================
+modelling rows: 460,394  frauds: 1,142  steps 1..95
+training pool: steps 1-42 (400,846 rows, 498 frauds)
+hold-out     : steps 43-95 (59,548 rows, 644 frauds)  <- newest data, never used for training or calibration
+
+======================================================================
+2. TRAIN CANDIDATE on all data before the hold-out
+======================================================================
+candidate v20261115-131217-546: 344,757 training rows, 451 frauds
+
+======================================================================
+3. COMPARE ON THE HOLD-OUT (same cost parameters as the live policy)
+======================================================================
+                               LIVE v20261115-131002-538           CANDIDATE
+PR-AUC                                            0.9872              0.9872
+Brier score                                     0.000951            0.000951
+Worst decile gap (pp)                              1.375               1.375
+TOTAL EXPECTED COST                            2,069,745           2,069,745
+decision mix              APP 98.79% / STE 0.01% / REV 0.22% / DEC 0.97%
+                                                        APP 98.79% / STE 0.01% / REV 0.22% / DEC 0.97%
+
+======================================================================
+4. PROMOTION GATES
+======================================================================
+calibration gate : worst decile gap 1.375 pp <= 5.0 pp ... PASS
+cost gate        : candidate saves +0.00% (needs >= 1.00%) ... FAIL
+
+======================================================================
+RESULT
+======================================================================
+NOT PROMOTED (not cheaper than the live model by enough). Live model stays v20261115-131002-538. Candidate kept in sim_registry\v20261115-131217-546
+total time 15s

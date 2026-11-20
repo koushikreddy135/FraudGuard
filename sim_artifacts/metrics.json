@@ -1,0 +1,9 @@
+{
+  "modelVersion": "v20261115-130958-750-old",
+  "trained_rows": 196185,
+  "trained_frauds": 220,
+  "calibration_rows": 23549,
+  "calibration_frauds": 11,
+  "data_until_step": 19,
+  "note": "simulated older model"
+}
