@@ -1,0 +1,43 @@
+{
+  "modelVersion": "v20261120-154831",
+  "train_steps": [
+    1,
+    37
+  ],
+  "test_steps": [
+    38,
+    95
+  ],
+  "logistic_regression": {
+    "pr_auc": 0.20485105519735028,
+    "recall_at_1pct_fpr": 0.7089337175792507
+  },
+  "lightgbm_raw": {
+    "pr_auc": 0.9812128376512074,
+    "recall_at_1pct_fpr": 0.9913544668587896
+  },
+  "lightgbm_calibrated": {
+    "pr_auc": 0.9700692218062523,
+    "brier": 0.0003850472037625861
+  },
+  "confusion_matrix": {
+    "at_1pct_fpr": {
+      "threshold": 0.32777,
+      "tn": 67994,
+      "fp": 32,
+      "fn": 5,
+      "tp": 342,
+      "precision": 0.9144,
+      "recall": 0.9856
+    },
+    "at_0.5": {
+      "threshold": 0.5,
+      "tn": 68005,
+      "fp": 21,
+      "fn": 9,
+      "tp": 338,
+      "precision": 0.9415,
+      "recall": 0.9741
+    }
+  }
+}

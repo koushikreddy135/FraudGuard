@@ -1,0 +1,42 @@
+
+======================================================================
+1. LOAD LABELLED DATA
+======================================================================
+modelling rows: 460,394  frauds: 1,142  steps 1..95
+training pool: steps 1-42 (400,846 rows, 498 frauds)
+hold-out     : steps 43-95 (59,548 rows, 644 frauds)  <- newest data, never used for training or calibration
+
+======================================================================
+SIMULATION: deploying an older model trained on early data only
+======================================================================
+WARNING: calibration slice has only 11 frauds; calibration will be noisy.
+old live model v20261115-130958-750-old trained on 196,185 rows up to step 19
+
+======================================================================
+2. TRAIN CANDIDATE on all data before the hold-out
+======================================================================
+candidate v20261115-131002-538: 344,757 training rows, 451 frauds
+
+======================================================================
+3. COMPARE ON THE HOLD-OUT (same cost parameters as the live policy)
+======================================================================
+                             LIVE v20261115-130958-750-o           CANDIDATE
+PR-AUC                                            0.9216              0.9872
+Brier score                                     0.002160            0.000951
+Worst decile gap (pp)                              1.925               1.375
+TOTAL EXPECTED COST                            6,226,513           2,069,745
+decision mix              APP 98.36% / STE 0.44% / REV 0.31% / DEC 0.89%
+                                                        APP 98.79% / STE 0.01% / REV 0.22% / DEC 0.97%
+
+======================================================================
+4. PROMOTION GATES
+======================================================================
+calibration gate : worst decile gap 1.375 pp <= 5.0 pp ... PASS
+cost gate        : candidate saves +66.76% (needs >= 1.00%) ... PASS
+
+======================================================================
+RESULT
+======================================================================
+PROMOTED v20261115-131002-538  (passed both gates).  Live model folder: C:\Users\PC\Downloads\fraudguard_ml\fraudguard_ml\sim_artifacts
+Restart serve.py so it loads the new model. Roll back any time with:  python retrain.py --rollback
+total time 12s
