@@ -28,10 +28,16 @@ import lightgbm as lgb
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from policy import DEFAULT_COST_PARAMS, decide_one
+from backend.database import init_db
+from backend.auth_routes import router as auth_router
+from backend.customer_routes import router as customer_router
+from backend.admin_routes import router as admin_router
 
 warnings.filterwarnings("ignore", category=UserWarning)
 MODEL_DIR = Path(os.environ.get("MODEL_DIR", "artifacts"))
@@ -40,11 +46,26 @@ STATE = {"ready": False}
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    init_db()                                 # Initialize SQLite auth database and schema
     load()                                    # runs once at startup, before the first request
     yield
 
 
-app = FastAPI(title="FraudGuard ML Service", version="1.0", lifespan=lifespan)
+app = FastAPI(title="FraudGuard ML & Authentication Service", version="1.0", lifespan=lifespan)
+
+# Enable CORS for local dev servers
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register Authentication & Portal Routers
+app.include_router(auth_router)
+app.include_router(customer_router)
+app.include_router(admin_router)
 
 
 # API names (snake_case, like the rest of the plan)  ->  internal names used in policy.py
@@ -228,3 +249,22 @@ def score(req: ScoreRequest):
     return {"transaction_id": req.transaction_id, "fraud_probability": round(prob, 6), "decision": action,
             "expected_costs": {DECISION_KEYS[k]: v for k, v in costs.items()},
             "top_factors": factors, "reasons": reasons, "model_version": STATE["version"]}
+
+
+# Serve production frontend single-page application (SPA)
+FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
+if FRONTEND_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        # Don't intercept API or docs routes
+        if full_path.startswith("api/") or full_path in ("docs", "redoc", "openapi.json"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        file_path = FRONTEND_DIST / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+        index_file = FRONTEND_DIST / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
+        raise HTTPException(status_code=404, detail="Not Found")

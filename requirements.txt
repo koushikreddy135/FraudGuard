@@ -4,8 +4,14 @@ scikit-learn
 lightgbm
 joblib
 fastapi
-uvicorn
+uvicorn[standard]
 pydantic
 aiohttp
 pytest
 httpx
+# Auth dependencies
+bcrypt
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+python-dotenv
