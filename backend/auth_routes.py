@@ -177,8 +177,9 @@ async def login(req: LoginRequest, request: Request, response: Response):
             key="fraudguard_session",
             value=access_token,
             httponly=True,
-            secure=False, # Set to True in production with HTTPS
+            secure=(settings.ENVIRONMENT != "development"),
             samesite="lax",
+            path="/",
             max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
         )
 
@@ -280,16 +281,22 @@ async def verify_otp(req: VerifyOtpRequest):
 
         if record["attempts_left"] <= 0:
             cursor.execute("UPDATE password_reset_otps SET is_used = 1 WHERE id = ?", (record["id"],))
+            conn.commit()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Maximum verification attempts exceeded. Please request a new code.")
 
         if now > datetime.fromisoformat(record["expires_at"]):
             cursor.execute("UPDATE password_reset_otps SET is_used = 1 WHERE id = ?", (record["id"],))
+            conn.commit()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Verification code has expired. Please request a new code.")
 
         if hash_token(req.otp) != record["otp_hash"]:
             remaining = record["attempts_left"] - 1
-            cursor.execute("UPDATE password_reset_otps SET attempts_left = ? WHERE id = ?", (remaining, record["id"]))
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Incorrect verification code. {remaining} attempt(s) remaining.")
+            if remaining <= 0:
+                cursor.execute("UPDATE password_reset_otps SET attempts_left = 0, is_used = 1 WHERE id = ?", (record["id"],))
+            else:
+                cursor.execute("UPDATE password_reset_otps SET attempts_left = ? WHERE id = ?", (remaining, record["id"]))
+            conn.commit()
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Incorrect verification code. {max(0, remaining)} attempt(s) remaining.")
 
     return {"message": "Verification code is valid.", "valid": True}
 
@@ -323,15 +330,21 @@ async def reset_password(req: ResetPasswordRequest):
 
         if record["attempts_left"] <= 0:
             cursor.execute("UPDATE password_reset_otps SET is_used = 1 WHERE id = ?", (record["id"],))
+            conn.commit()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Maximum attempts exceeded. Please request a new code.")
 
         if now > datetime.fromisoformat(record["expires_at"]):
             cursor.execute("UPDATE password_reset_otps SET is_used = 1 WHERE id = ?", (record["id"],))
+            conn.commit()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Verification code has expired.")
 
         if hash_token(req.otp) != record["otp_hash"]:
             remaining = record["attempts_left"] - 1
-            cursor.execute("UPDATE password_reset_otps SET attempts_left = ? WHERE id = ?", (remaining, record["id"]))
+            if remaining <= 0:
+                cursor.execute("UPDATE password_reset_otps SET attempts_left = 0, is_used = 1 WHERE id = ?", (record["id"],))
+            else:
+                cursor.execute("UPDATE password_reset_otps SET attempts_left = ? WHERE id = ?", (remaining, record["id"]))
+            conn.commit()
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid verification code.")
 
         # OTP verified! Mark as used immediately
@@ -366,7 +379,7 @@ async def logout(response: Response):
     """
     Logs out the current session by clearing the session cookie.
     """
-    response.delete_cookie(key="fraudguard_session")
+    response.delete_cookie(key="fraudguard_session", path="/", httponly=True, samesite="lax")
     return {"message": "Successfully signed out."}
 
 # ───────────────────────────────────────────────
@@ -374,9 +387,9 @@ async def logout(response: Response):
 # ───────────────────────────────────────────────
 
 @router.get("/oauth/google/url")
-async def get_google_oauth_url():
+async def get_google_oauth_url(response: Response):
     """
-    Returns the Google OAuth 2.0 authorization URL.
+    Returns the Google OAuth 2.0 authorization URL and sets a secure CSRF state cookie.
     """
     if not settings.GOOGLE_CLIENT_ID:
         return {
@@ -386,6 +399,16 @@ async def get_google_oauth_url():
         }
     
     state = uuid.uuid4().hex
+    response.set_cookie(
+        key="oauth_state",
+        value=state,
+        httponly=True,
+        secure=(settings.ENVIRONMENT != "development"),
+        samesite="lax",
+        path="/",
+        max_age=600  # 10 minutes
+    )
+
     params = {
         "client_id": settings.GOOGLE_CLIENT_ID,
         "redirect_uri": settings.GOOGLE_REDIRECT_URI,
@@ -405,15 +428,25 @@ async def get_google_oauth_url():
 
 @router.get("/oauth/google/callback")
 async def google_oauth_callback(
+    request: Request,
+    response: Response,
     code: Optional[str] = None,
     error: Optional[str] = None,
     state: Optional[str] = None
 ):
     """
-    Handles Google OAuth redirect, exchanges code for ID/access tokens,
+    Handles Google OAuth redirect, validates CSRF state, exchanges code for ID/access tokens,
     verifies identity via OIDC userinfo, provisions or finds CUSTOMER user,
     and redirects user to customer portal with JWT token.
     """
+    # 1. Verify CSRF State
+    cookie_state = request.cookies.get("oauth_state")
+    response.delete_cookie(key="oauth_state", path="/", httponly=True, samesite="lax")
+
+    if not state or not cookie_state or state != cookie_state:
+        err_msg = urllib.parse.quote("Invalid or expired OAuth state parameter (CSRF protection). Please try again.")
+        return RedirectResponse(url=f"/login?oauth_error={err_msg}")
+
     if error or not code:
         err_msg = urllib.parse.quote(error or "Authorization code missing from Google")
         return RedirectResponse(url=f"/login?oauth_error={err_msg}")
@@ -424,7 +457,7 @@ async def google_oauth_callback(
     
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # 1. Exchange authorization code for tokens
+            # 2. Exchange authorization code for tokens
             token_resp = await client.post(
                 "https://oauth2.googleapis.com/token",
                 data={
@@ -443,7 +476,7 @@ async def google_oauth_callback(
             token_data = token_resp.json()
             access_token_google = token_data.get("access_token")
             
-            # 2. Fetch verified userinfo from Google OIDC endpoint
+            # 3. Fetch verified userinfo from Google OIDC endpoint
             userinfo_resp = await client.get(
                 "https://www.googleapis.com/oauth2/v3/userinfo",
                 headers={"Authorization": f"Bearer {access_token_google}"}
@@ -512,8 +545,9 @@ async def google_oauth_callback(
                 key="fraudguard_session",
                 value=fg_token,
                 httponly=True,
-                secure=False,
+                secure=(settings.ENVIRONMENT != "development"),
                 samesite="lax",
+                path="/",
                 max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
             )
             return redirect

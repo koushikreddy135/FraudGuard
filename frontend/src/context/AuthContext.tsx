@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import { apiRequest, type User } from '../services/api';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { apiRequest, setApiToken, type User } from '../services/api';
 
 interface AuthContextType {
   user: User | null;
@@ -13,21 +13,17 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('fraudguard_user');
-    return saved ? JSON.parse(saved) : null;
-  });
-  const [token, setToken] = useState<string | null>(() => localStorage.getItem('fraudguard_token'));
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
-  const login = (newToken: string, newUser: User) => {
+  const login = useCallback((newToken: string, newUser: User) => {
     setToken(newToken);
     setUser(newUser);
-    localStorage.setItem('fraudguard_token', newToken);
-    localStorage.setItem('fraudguard_user', JSON.stringify(newUser));
-  };
+    setApiToken(newToken);
+  }, []);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try {
       await apiRequest('/api/auth/logout', { method: 'POST' });
     } catch {
@@ -35,34 +31,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setToken(null);
       setUser(null);
-      localStorage.removeItem('fraudguard_token');
-      localStorage.removeItem('fraudguard_user');
+      setApiToken(null);
     }
-  };
+  }, []);
 
-  const refreshProfile = async () => {
-    if (!token) {
-      setLoading(false);
-      return;
-    }
+  const refreshProfile = useCallback(async () => {
     try {
+      // Validates HttpOnly session cookie with backend /api/auth/me
       const data = await apiRequest<User>('/api/auth/me');
       setUser(data);
-      localStorage.setItem('fraudguard_user', JSON.stringify(data));
-    } catch (err) {
-      console.warn("Session check failed, logging out:", err);
-      setToken(null);
+    } catch {
+      // If unauthenticated or session expired, reset state cleanly
       setUser(null);
-      localStorage.removeItem('fraudguard_token');
-      localStorage.removeItem('fraudguard_user');
+      setToken(null);
+      setApiToken(null);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     refreshProfile();
-  }, []);
+
+    const handleSessionExpired = () => {
+      setUser(null);
+      setToken(null);
+      setApiToken(null);
+    };
+
+    window.addEventListener('fraudguard:session-expired', handleSessionExpired);
+    return () => {
+      window.removeEventListener('fraudguard:session-expired', handleSessionExpired);
+    };
+  }, [refreshProfile]);
 
   return (
     <AuthContext.Provider value={{ user, token, loading, login, logout, refreshProfile }}>

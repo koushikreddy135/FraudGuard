@@ -34,6 +34,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from policy import DEFAULT_COST_PARAMS, decide_one
+from backend.config import settings
 from backend.database import init_db
 from backend.auth_routes import router as auth_router
 from backend.customer_routes import router as customer_router
@@ -53,13 +54,13 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="FraudGuard ML & Authentication Service", version="1.0", lifespan=lifespan)
 
-# Enable CORS for local dev servers
+# Configure trusted frontend CORS origins (disallows wildcard with credentials)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
 )
 
 # Register Authentication & Portal Routers

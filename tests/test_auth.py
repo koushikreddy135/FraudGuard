@@ -352,3 +352,71 @@ def test_logout_clears_session(client):
     res = client.post("/api/auth/logout", headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 200
     assert "signed out" in res.json()["message"].lower()
+
+# ───────────────────────────────────────────────
+# ROLE TAMPERING & PRIVILEGE ESCALATION PREVENTION
+# ───────────────────────────────────────────────
+
+def test_registration_cannot_escalate_to_admin(client):
+    """Passing role: ADMIN in public registration must be ignored/enforced as CUSTOMER."""
+    tamper_email = f"tamper.{_RUN_ID}@example.com"
+    res = client.post("/api/auth/register/customer", json={
+        "full_name": "Tamper User",
+        "email": tamper_email,
+        "password": "SecurePassword@123",
+        "confirm_password": "SecurePassword@123",
+        "role": "ADMIN"  # Attempt privilege escalation
+    })
+    assert res.status_code == 201
+    assert res.json()["role"] == "CUSTOMER"
+
+    # Verify directly in SQLite
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT role FROM users WHERE email = ?", (tamper_email,))
+        row = cursor.fetchone()
+        assert row["role"] == "CUSTOMER"
+
+# ───────────────────────────────────────────────
+# OTP ATTEMPT DURABILITY & REPLAY PREVENTION
+# ───────────────────────────────────────────────
+
+def test_otp_failed_attempts_decrement_durably(client):
+    """Wrong OTP submissions must decrement attempts_left in SQLite even on HTTP 400 error."""
+    test_email = f"otp.attempts.{_RUN_ID}@example.com"
+    client.post("/api/auth/register/customer", json={
+        "full_name": "Attempt User",
+        "email": test_email,
+        "password": "SecurePassword@123",
+        "confirm_password": "SecurePassword@123"
+    })
+    client.post("/api/auth/forgot-password", json={"email": test_email})
+
+    # Wrong attempt 1
+    r1 = client.post("/api/auth/verify-otp", json={"email": test_email, "otp": "999999"})
+    assert r1.status_code == 400
+
+    # Verify attempt decrement persisted in database
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT attempts_left FROM password_reset_otps o JOIN users u ON o.user_id = u.id "
+            "WHERE u.email = ? AND o.is_used = 0 ORDER BY o.created_at DESC LIMIT 1",
+            (test_email,)
+        )
+        record = cursor.fetchone()
+        assert record is not None
+        assert record["attempts_left"] == 4, f"Expected 4 attempts left, got {record['attempts_left']}"
+
+# ───────────────────────────────────────────────
+# GOOGLE OAUTH CSRF STATE VERIFICATION
+# ───────────────────────────────────────────────
+
+def test_google_oauth_csrf_protection(client):
+    """Google OAuth callback without matching state cookie must be rejected."""
+    # State provided in URL does not match any valid oauth_state cookie
+    res = client.get("/api/auth/oauth/google/callback?code=fake_code&state=forged_state", follow_redirects=False)
+    assert res.status_code == 307
+    location = res.headers.get("location", "")
+    assert "oauth_error" in location
+    assert "CSRF" in location or "state" in location
