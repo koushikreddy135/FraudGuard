@@ -1,0 +1,76 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color-scheme: light dark;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+/* CUSTOMER THEME DESIGN TOKENS (Spring Meadow, Teal Waters, Glacial Sky, Morning Mist) */
+.theme-customer {
+  --bg-page: #F5F7ED; /* Morning Mist */
+  --bg-card: #FFFFFF;
+  --bg-card-subtle: #F0F4E8;
+  --text-primary: #164E63; /* Teal Waters */
+  --text-secondary: #336B7F;
+  --text-muted: #64748B;
+  --border-color: #D8E5D3;
+  --primary: #164E63;
+  --primary-hover: #0E3544;
+  --accent: #B7F5A8; /* Spring Meadow */
+  --accent-soft: rgba(183, 245, 168, 0.35);
+  --accent-sky: #A8DDEB; /* Glacial Sky */
+  --shadow-sm: 0 1px 2px rgba(22, 78, 99, 0.05);
+  --shadow-md: 0 4px 12px rgba(22, 78, 99, 0.08);
+  --shadow-lg: 0 10px 25px -5px rgba(22, 78, 99, 0.12);
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+}
+
+/* ADMIN THEME DESIGN TOKENS (Black, Slate, Cyan, White) */
+.theme-admin {
+  --bg-page: #07090C; /* Black */
+  --bg-card: #18232C; /* Slate */
+  --bg-card-subtle: #121A22;
+  --text-primary: #F5FAFC; /* White */
+  --text-secondary: #94A3B8;
+  --text-muted: #64748B;
+  --border-color: #243542;
+  --border-focus: #08BCEB;
+  --primary: #08BCEB; /* Cyan */
+  --primary-hover: #069EC7;
+  --accent: #08BCEB;
+  --accent-soft: rgba(8, 188, 235, 0.15);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 12px 30px rgba(0, 0, 0, 0.8);
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+}
+
+button {
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.2s ease-in-out;
+}
+
+input, button, select, textarea {
+  font: inherit;
+}
