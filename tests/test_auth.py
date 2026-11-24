@@ -4,6 +4,7 @@ Covers: registration, login, role enforcement, RBAC, brute-force lockout, OTP fl
 """
 import hashlib
 import uuid
+import urllib.parse
 import pytest
 from fastapi.testclient import TestClient
 from backend.test_app import build_auth_app
@@ -420,3 +421,31 @@ def test_google_oauth_csrf_protection(client):
     location = res.headers.get("location", "")
     assert "oauth_error" in location
     assert "CSRF" in location or "state" in location
+
+
+def test_google_oauth_state_is_scoped_per_attempt(client):
+    first = client.get("/api/auth/oauth/google/url")
+    assert first.status_code == 200
+    first_url = first.json()["url"]
+    assert first_url is not None
+    first_state = urllib.parse.parse_qs(
+        urllib.parse.urlparse(first_url).query
+    )["state"][0]
+
+    second = client.get("/api/auth/oauth/google/url")
+    assert second.status_code == 200
+    second_url = second.json()["url"]
+    second_state = urllib.parse.parse_qs(
+        urllib.parse.urlparse(second_url).query
+    )["state"][0]
+    assert first_state != second_state
+
+    first_callback = client.get(
+        "/api/auth/oauth/google/callback",
+        params={"code": "fake-code", "state": first_state},
+        follow_redirects=False,
+    )
+    assert first_callback.status_code == 307
+    location = first_callback.headers["location"]
+    assert "oauth_error" in location
+    assert "Invalid or expired OAuth state" not in location

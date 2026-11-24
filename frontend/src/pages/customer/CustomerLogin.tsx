@@ -12,7 +12,7 @@ export const CustomerLogin: React.FC = () => {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { login } = useAuth();
   const navigate = useNavigate();
 
@@ -20,8 +20,11 @@ export const CustomerLogin: React.FC = () => {
     const oauthError = searchParams.get('oauth_error');
     if (oauthError) {
       setError(decodeURIComponent(oauthError));
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('oauth_error');
+      setSearchParams(nextParams, { replace: true });
     }
-  }, [searchParams]);
+  }, [searchParams, setSearchParams]);
 
   const handleGoogleOAuth = async () => {
     setError(null);

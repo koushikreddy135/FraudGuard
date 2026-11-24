@@ -403,14 +403,24 @@ async def get_google_oauth_url(response: Response):
         }
     
     state = uuid.uuid4().hex
-    response.set_cookie(
-        key="oauth_state",
+    cookie_options = dict(
         value=state,
         httponly=True,
         secure=(settings.ENVIRONMENT != "development"),
         samesite="lax",
         path="/",
-        max_age=600  # 10 minutes
+        max_age=1800,
+    )
+    # Exact-key state cookies prevent a second OAuth tab from overwriting
+    # the state expected by the first tab.
+    response.set_cookie(
+        key=f"oauth_state_{state}",
+        **cookie_options,
+    )
+    # Retain the legacy key during a rolling deployment for in-flight logins.
+    response.set_cookie(
+        key="oauth_state",
+        **cookie_options,
     )
 
     params = {
@@ -444,8 +454,20 @@ async def google_oauth_callback(
     and redirects user to customer portal with JWT token.
     """
     # 1. Verify CSRF State
-    cookie_state = request.cookies.get("oauth_state")
-    response.delete_cookie(key="oauth_state", path="/", httponly=True, samesite="lax")
+    exact_cookie_state = request.cookies.get(f"oauth_state_{state}") if state else None
+    legacy_cookie_state = request.cookies.get("oauth_state")
+    cookie_state = exact_cookie_state or (
+        legacy_cookie_state if state and state == legacy_cookie_state else None
+    )
+    cookie_options = dict(
+        path="/",
+        httponly=True,
+        secure=(settings.ENVIRONMENT != "development"),
+        samesite="lax",
+    )
+    if state:
+        response.delete_cookie(key=f"oauth_state_{state}", **cookie_options)
+    response.delete_cookie(key="oauth_state", **cookie_options)
 
     if not state or not cookie_state or state != cookie_state:
         err_msg = urllib.parse.quote("Invalid or expired OAuth state parameter (CSRF protection). Please try again.")

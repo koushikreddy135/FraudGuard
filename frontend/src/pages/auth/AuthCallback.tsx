@@ -5,7 +5,7 @@ import { apiRequest, type User } from '../../services/api';
 import { ShieldCheck, AlertCircle, Loader2 } from 'lucide-react';
 
 export const AuthCallback: React.FC = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -16,6 +16,9 @@ export const AuthCallback: React.FC = () => {
 
     if (oauthError) {
       setError(decodeURIComponent(oauthError));
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('oauth_error');
+      setSearchParams(nextParams, { replace: true });
       return;
     }
 
