@@ -1,5 +1,11 @@
+# Run locally (PowerShell):
+#   $env:SECRET_KEY = "<64 hex characters>"
+#   docker compose up --build -d
+# Jenkins deploy: IMAGE / IMAGE_TAG / SECRET_KEY are provided by the Jenkinsfile.
+
 services:
   fraudguard:
+    image: ${IMAGE:-fraudguard-app}:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
@@ -8,11 +14,25 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - ENVIRONMENT=production
-      - JWT_SECRET_KEY=production-secure-key-replace-with-env-secret-32-chars
-      - CORS_ORIGINS=["http://localhost:8000","http://127.0.0.1:8000"]
-      - MODEL_DIR=artifacts
-      - ML_SERVICE_URL=http://localhost:8000
+      # The code reads SECRET_KEY (NOT JWT_SECRET_KEY). Required: without it the app silently falls
+      # back to a public default signing key, so compose refuses to start when it is missing.
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set (64 hex characters)}
+      # "production" turns on Secure cookies; browsers accept them on http://localhost.
+      # For a plain-HTTP demo on another address, run with ENVIRONMENT=development.
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      # Database lives on the named volume below, so users survive redeploys
+      DB_PATH: /app/data/fraudguard.db
+      MODEL_DIR: artifacts
+      ML_SERVICE_URL: http://127.0.0.1:8000
+      # Optional: Google sign-in and password-reset email
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/auth/oauth/google/callback}
+      SMTP_ENABLED: ${SMTP_ENABLED:-False}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
     volumes:
       - fraudguard_data:/app/data
     healthcheck:
@@ -20,7 +40,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 40s
 
 volumes:
   fraudguard_data:

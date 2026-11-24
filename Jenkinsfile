@@ -1,80 +1,97 @@
+// FraudGuard CI/CD for Jenkins running natively on WINDOWS (uses `bat` / `powershell` steps).
+//
+// GitHub push -> webhook -> Jenkins -> pytest (inside Docker) -> docker build -> docker compose up -> health check
+//
+// Needs on the PC: Docker Desktop (running, Linux containers) and Git. Python, Node and kubectl are
+// NOT needed: tests and the frontend build run inside Docker.
+// The job deploys whichever branch it is configured to watch (Branch Specifier in the job).
+
 pipeline {
     agent any
 
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        skipDefaultCheckout(true)                      // shallow checkout below (repo is large)
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    triggers {
+        githubPush()                                   // fired by the GitHub webhook (needs the GitHub plugin)
+    }
+
     environment {
-        PYTHON_VERSION = '3.12'
-        IMAGE_NAME = 'fraudguard-app'
-        IMAGE_TAG = "${env.BUILD_NUMBER}"
+        IMAGE_NAME           = 'fraudguard-app'
+        SECRET_CRED          = 'fraudguard-secret-key' // Jenkins: Secret text (64 hex characters)
+        COMPOSE_PROJECT_NAME = 'fraudguard'
+        DOCKER_BUILDKIT      = '1'
     }
 
     stages {
+
         stage('Checkout Code') {
             steps {
-                echo 'Checking out source repository...'
-                checkout scm
+                checkout([
+                    $class: 'GitSCM',
+                    branches: scm.branches,
+                    userRemoteConfigs: scm.userRemoteConfigs,
+                    extensions: [[$class: 'CloneOption', shallow: true, depth: 1, noTags: true, timeout: 30]]
+                ])
+                script {
+                    def sha = bat(script: '@git rev-parse --short HEAD', returnStdout: true).trim()
+                    env.IMAGE_TAG = "${env.BUILD_NUMBER}-${sha}"
+                    echo "Building ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+                }
             }
         }
 
-        stage('Install Backend & Run Security Tests') {
+        stage('Run Tests') {
             steps {
-                echo 'Running pytest validation suite and LightGBM inference checks...'
-                sh '''
-                    python3 -m venv venv
-                    . venv/bin/activate
-                    pip install --upgrade pip
-                    pip install -r requirements.txt
-                    pytest tests/ -p no:langsmith -q
-                '''
+                // Builds the Dockerfile `test` target and runs pytest (58 tests)
+                bat 'docker build --target test -t fraudguard-test:%BUILD_NUMBER% .'
+                bat 'docker run --rm fraudguard-test:%BUILD_NUMBER%'
             }
         }
 
-        stage('Frontend Build & Lint') {
+        stage('Build Docker Image') {
             steps {
-                dir('frontend') {
-                    echo 'Building production React artifacts...'
-                    sh '''
-                        npm ci
-                        npm run build
+                // The React build (tsc + vite) happens inside the Dockerfile
+                bat 'docker build -t %IMAGE_NAME%:%IMAGE_TAG% -t %IMAGE_NAME%:latest .'
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                withCredentials([string(credentialsId: env.SECRET_CRED, variable: 'SECRET_KEY')]) {
+                    bat '''
+                        set IMAGE=%IMAGE_NAME%
+                        docker compose up -d --no-build
                     '''
                 }
             }
         }
 
-        stage('Docker Image Build') {
+        stage('Smoke Test') {
             steps {
-                echo 'Building container image...'
-                sh '''
-                    docker build -t ${IMAGE_NAME}:${IMAGE_TAG} -t ${IMAGE_NAME}:latest .
-                '''
-            }
-        }
-
-        stage('Deploy to Kubernetes') {
-            when {
-                branch 'main'
-            }
-            steps {
-                echo 'Applying Kubernetes manifests...'
-                sh '''
-                    kubectl apply -f k8s/configmap.yaml
-                    kubectl apply -f k8s/secret.yaml
-                    kubectl apply -f k8s/deployment.yaml
-                    kubectl apply -f k8s/service.yaml
-                    kubectl rollout status deployment/fraudguard-deployment --timeout=120s
+                // Wait for the container HEALTHCHECK (/health = 200 once the model has loaded)
+                powershell '''
+                    for ($i = 0; $i -lt 30; $i++) {
+                        $s = docker inspect -f "{{.State.Health.Status}}" fraudguard-app 2>$null
+                        Write-Host "health: $s"
+                        if ($s -eq "healthy") { exit 0 }
+                        Start-Sleep -Seconds 5
+                    }
+                    docker logs --tail 100 fraudguard-app
+                    exit 1
                 '''
             }
         }
     }
 
     post {
-        always {
-            cleanWs()
-        }
-        success {
-            echo 'FraudGuard CI/CD Pipeline completed successfully.'
-        }
-        failure {
-            echo 'FraudGuard pipeline failed. Check console output.'
-        }
+        success { echo "FraudGuard deployed: ${env.IMAGE_NAME}:${env.IMAGE_TAG} -> http://localhost:8000" }
+        failure { echo 'FraudGuard pipeline failed. Check the failing stage in the console output.' }
+        always  { bat(script: 'docker image prune -f', returnStatus: true) }
     }
 }

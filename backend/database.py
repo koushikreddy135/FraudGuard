@@ -3,8 +3,7 @@ import os
 from contextlib import contextmanager
 from datetime import datetime
 
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "fraudguard.db"))
-
+DB_PATH = os.path.abspath(os.environ.get("DB_PATH") or os.path.join(os.path.dirname(__file__), "..", "fraudguard.db"))
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
