@@ -18,7 +18,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: backend
-          image: fraudguard-backend:7-fb9d957
+          image: fraudguard-backend:9-63d2be2
           imagePullPolicy: Never
           ports:
             - containerPort: 8000
@@ -112,7 +112,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: fraudguard-frontend:7-fb9d957
+          image: fraudguard-frontend:9-63d2be2
           imagePullPolicy: Never
           ports:
             - containerPort: 80
