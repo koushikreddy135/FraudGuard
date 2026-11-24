@@ -475,3 +475,20 @@ def test_google_oauth_redirect_uri_matches_request_origin(client):
     assert loopback_query["redirect_uri"] == [
         "http://127.0.0.1:8000/api/auth/oauth/google/callback"
     ]
+
+
+def test_google_oauth_accepts_one_time_server_state_without_cookie(client):
+    response = client.get("/api/auth/oauth/google/url")
+    oauth_url = response.json()["url"]
+    state = urllib.parse.parse_qs(
+        urllib.parse.urlparse(oauth_url).query
+    )["state"][0]
+    client.cookies.clear()
+
+    callback = client.get(
+        "/api/auth/oauth/google/callback",
+        params={"code": "fake-code", "state": state},
+        follow_redirects=False,
+    )
+    assert callback.status_code == 307
+    assert "Invalid or expired OAuth state" not in callback.headers["location"]

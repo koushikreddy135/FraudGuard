@@ -412,6 +412,17 @@ async def get_google_oauth_url(request: Request, response: Response):
         host = forwarded_host or request.headers.get("host") or request.url.netloc
         if host:
             redirect_uri = f"{scheme}://{host}/api/auth/oauth/google/callback"
+
+    expires_at = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
+    with get_db() as conn:
+        conn.execute(
+            "DELETE FROM oauth_states WHERE expires_at <= ? OR is_used = 1",
+            (datetime.now(timezone.utc).isoformat(),),
+        )
+        conn.execute("""
+            INSERT INTO oauth_states (state, redirect_uri, expires_at, is_used, created_at)
+            VALUES (?, ?, ?, 0, ?)
+        """, (state, redirect_uri, expires_at, datetime.now(timezone.utc).isoformat()))
     cookie_options = dict(
         value=state,
         httponly=True,
@@ -503,9 +514,39 @@ async def google_oauth_callback(
     response.delete_cookie(key="oauth_state", **cookie_options)
     response.delete_cookie(key="oauth_redirect_uri", **cookie_options)
 
-    if not state or not cookie_state or state != cookie_state:
+    server_state = None
+    if state:
+        with get_db() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            server_state = conn.execute(
+                "SELECT state, redirect_uri, expires_at, is_used "
+                "FROM oauth_states WHERE state = ?",
+                (state,),
+            ).fetchone()
+            if server_state:
+                expires_at = datetime.fromisoformat(server_state["expires_at"])
+                if datetime.now(timezone.utc) >= expires_at or server_state["is_used"]:
+                    server_state = None
+                else:
+                    conn.execute(
+                        "UPDATE oauth_states SET is_used = 1 WHERE state = ?",
+                        (state,),
+                    )
+
+    exact_cookie_matches = exact_cookie_state is not None and exact_cookie_state == state
+    legacy_cookie_matches = legacy_cookie_state is not None and legacy_cookie_state == state
+    exact_cookie_conflicts = exact_cookie_state is not None and exact_cookie_state != state
+    cookie_matches = exact_cookie_matches or legacy_cookie_matches
+    if (
+        not state
+        or (server_state is None and not cookie_matches)
+        or exact_cookie_conflicts
+    ):
         err_msg = urllib.parse.quote("Invalid or expired OAuth state parameter (CSRF protection). Please try again.")
         return RedirectResponse(url=f"/login?oauth_error={err_msg}")
+
+    if server_state:
+        redirect_uri = server_state["redirect_uri"]
 
     if error or not code:
         err_msg = urllib.parse.quote(error or "Authorization code missing from Google")
