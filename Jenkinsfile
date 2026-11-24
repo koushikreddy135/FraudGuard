@@ -28,6 +28,9 @@ pipeline {
         SECRET_CRED          = 'fraudguard-secret-key' // Jenkins: Secret text (64 hex characters)
         COMPOSE_PROJECT_NAME = 'fraudguard'
         DOCKER_BUILDKIT      = '1'
+        // Jenkins runs as a Windows service, so it does not inherit the interactive user's PATH.
+        // This is the Docker Desktop CLI location on the development machine.
+        PATH = "C:\\Users\\koush\\AppData\\Local\\Programs\\DockerDesktop\\resources\\bin;${env.PATH}"
     }
 
     stages {
@@ -41,7 +44,8 @@ pipeline {
                     extensions: [[$class: 'CloneOption', shallow: true, depth: 1, noTags: true, timeout: 30]]
                 ])
                 script {
-                    def sha = bat(script: '@git rev-parse --short HEAD', returnStdout: true).trim()
+                    // SCM checkout exports GIT_COMMIT; avoid depending on interactive Git PATH.
+                    def sha = env.GIT_COMMIT.take(7)
                     env.IMAGE_TAG = "${env.BUILD_NUMBER}-${sha}"
                     echo "Building ${env.BACKEND_IMAGE}:${env.IMAGE_TAG} and ${env.FRONTEND_IMAGE}:${env.IMAGE_TAG}"
                 }
