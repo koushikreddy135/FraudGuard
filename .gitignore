@@ -30,6 +30,8 @@ ENV/
 # Environment Variables & Secrets (CRITICAL: NEVER COMMIT SECRETS)
 .env
 .env.*
+api.env
+*.env
 !.env.example
 
 # Local SQLite Database

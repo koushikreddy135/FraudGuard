@@ -26,14 +26,30 @@ interface AdminDashboardData {
   }>;
 }
 
+interface TransactionFeed {
+  id: string;
+  sender_name: string;
+  recipient_name: string;
+  amount: number;
+  fraud_probability: number | null;
+  decision: string | null;
+  status: string;
+  timestamp: string;
+}
+
 export const AdminDashboard: React.FC = () => {
   const { user } = useAuth();
   const [data, setData] = useState<AdminDashboardData | null>(null);
+  const [transactions, setTransactions] = useState<TransactionFeed[]>([]);
+  const [feedError, setFeedError] = useState('');
 
   useEffect(() => {
     apiRequest<AdminDashboardData>('/api/admin/dashboard')
       .then(setData)
       .catch((err) => console.error("Error loading admin dashboard:", err));
+    apiRequest<{ transactions: TransactionFeed[] }>('/api/admin/transactions')
+      .then((feed) => setTransactions(feed.transactions))
+      .catch((err) => setFeedError(err instanceof Error ? err.message : 'Unable to load transaction feed.'));
   }, []);
 
   return (
@@ -211,6 +227,77 @@ export const AdminDashboard: React.FC = () => {
                 <tr>
                   <td colSpan={4} style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>
                     No audit records recorded yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Persisted transaction monitoring feed */}
+      <div style={{
+        backgroundColor: 'var(--bg-card)',
+        borderRadius: 'var(--radius-sm)',
+        border: '1px solid var(--border-color)',
+        overflow: 'hidden'
+      }}>
+        <div style={{
+          padding: '18px 22px',
+          borderBottom: '1px solid var(--border-color)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <h2 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+            Live Transaction Monitoring
+          </h2>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+            PERSISTED DATABASE FEED
+          </span>
+        </div>
+        {feedError && <div style={{ padding: '16px 22px', color: '#FCA5A5', fontSize: '13px' }}>{feedError}</div>}
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '13px' }}>
+            <thead>
+              <tr style={{ backgroundColor: 'var(--bg-card-subtle)', borderBottom: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+                <th style={{ padding: '12px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Transaction</th>
+                <th style={{ padding: '12px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Sender / Recipient</th>
+                <th style={{ padding: '12px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Amount</th>
+                <th style={{ padding: '12px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Fraud Probability</th>
+                <th style={{ padding: '12px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Decision</th>
+                <th style={{ padding: '12px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Status</th>
+                <th style={{ padding: '12px 20px', fontSize: '11px', textTransform: 'uppercase' }}>Timestamp</th>
+              </tr>
+            </thead>
+            <tbody>
+              {transactions.map((transaction) => (
+                <tr key={transaction.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                  <td style={{ padding: '12px 20px', color: 'var(--primary)', fontFamily: 'monospace', fontSize: '12px' }}>{transaction.id}</td>
+                  <td style={{ padding: '12px 20px', color: 'var(--text-primary)' }}>
+                    {transaction.sender_name} &rarr; {transaction.recipient_name}
+                  </td>
+                  <td style={{ padding: '12px 20px', color: 'var(--text-primary)', fontWeight: 700 }}>
+                    ${transaction.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </td>
+                  <td style={{ padding: '12px 20px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                    {transaction.fraud_probability == null ? 'Unavailable' : `${(transaction.fraud_probability * 100).toFixed(2)}%`}
+                  </td>
+                  <td style={{ padding: '12px 20px', color: 'var(--text-primary)', fontFamily: 'monospace' }}>
+                    {transaction.decision || 'N/A'}
+                  </td>
+                  <td style={{ padding: '12px 20px', color: 'var(--text-secondary)' }}>
+                    {transaction.status.replaceAll('_', ' ')}
+                  </td>
+                  <td style={{ padding: '12px 20px', color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '12px' }}>
+                    {new Date(transaction.timestamp).toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+              {!transactions.length && !feedError && (
+                <tr>
+                  <td colSpan={7} style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                    No persisted transactions recorded yet.
                   </td>
                 </tr>
               )}

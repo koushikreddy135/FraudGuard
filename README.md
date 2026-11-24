@@ -25,7 +25,9 @@ Use the same `--nrows` for train.py and make_demo_rows.py.
 Only `features` is required (plus `amount`, or `features.amount`). Missing features can be left out or `null`.
 `policy` and `queue_length` are optional.
 ```json
-{ "transaction_id": "t1", "fraud_probability": 0.97, "decision": "DECLINE",
+{ "transaction_id": "t1", "fraud_probability": 0.97,
+  "raw_fraud_probability": 0.98, "calibrated_fraud_probability": 0.97,
+  "scoring_latency_ms": 3.2, "decision": "DECLINE",
   "expected_costs": { "approve": 50440, "step_up": 15132, "review": 2700, "decline": 150 },
   "top_factors": [ { "feature": "amount_to_balance", "impact": 4.69, "value": 1 } ],
   "reasons": [ "The transfer empties the whole account balance" ],

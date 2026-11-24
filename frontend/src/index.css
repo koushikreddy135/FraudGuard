@@ -23,6 +23,7 @@ body {
 
 /* CUSTOMER THEME DESIGN TOKENS (Spring Meadow, Teal Waters, Glacial Sky, Morning Mist) */
 .theme-customer {
+  color-scheme: light;
   --bg-page: #F5F7ED; /* Morning Mist */
   --bg-card: #FFFFFF;
   --bg-card-subtle: #F0F4E8;

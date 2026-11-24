@@ -95,7 +95,7 @@ export const CustomerLayout: React.FC = () => {
               width: '100%',
               opacity: 0.8
             }}
-            onClick={() => alert("Transfers & Transactions will be integrated in Phase 2.")}
+            onClick={() => navigate('/customer/transfers')}
           >
             <CreditCard size={18} />
             Transfers & Activity

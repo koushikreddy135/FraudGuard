@@ -56,6 +56,10 @@ async def register_customer(req: CustomerRegisterRequest):
             INSERT INTO users (id, email, full_name, password_hash, role, is_active, failed_login_attempts, created_at, updated_at)
             VALUES (?, ?, ?, ?, 'CUSTOMER', 1, 0, ?, ?)
         """, (user_id, clean_email, req.full_name.strip(), pwd_hash, now_str, now_str))
+        cursor.execute("""
+            INSERT INTO accounts (id, user_id, balance_cents, currency, created_at, updated_at)
+            VALUES (?, ?, 1000000, 'USD', ?, ?)
+        """, (f"acct_{uuid.uuid4().hex[:12]}", user_id, now_str, now_str))
         
         cursor.execute("""
             INSERT INTO audit_logs (id, user_id, action, details, created_at)
@@ -524,6 +528,10 @@ async def google_oauth_callback(
                         INSERT INTO users (id, email, full_name, password_hash, role, is_active, failed_login_attempts, created_at, updated_at)
                         VALUES (?, ?, ?, ?, 'CUSTOMER', 1, 0, ?, ?)
                     """, (user_id, email, name, random_pwd_hash, now_str, now_str))
+                    cursor.execute("""
+                        INSERT INTO accounts (id, user_id, balance_cents, currency, created_at, updated_at)
+                        VALUES (?, ?, 1000000, 'USD', ?, ?)
+                    """, (f"acct_{uuid.uuid4().hex[:12]}", user_id, now_str, now_str))
                     
                     cursor.execute("""
                         INSERT INTO audit_logs (id, user_id, action, details, created_at)

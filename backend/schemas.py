@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 import re
 from typing import Optional, List, Dict, Any
 
@@ -114,3 +114,24 @@ class UserResponse(BaseModel):
     full_name: str
     role: str
     created_at: str
+
+class TransferRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    recipient: str = Field(..., min_length=2, max_length=160)
+    amount: float = Field(..., gt=0, le=1000000)
+    description: Optional[str] = Field(default=None, max_length=240)
+    idempotency_key: str = Field(..., min_length=8, max_length=128)
+
+    @field_validator("recipient")
+    @classmethod
+    def validate_recipient(cls, v: str) -> str:
+        cleaned = v.strip()
+        if not cleaned:
+            raise ValueError("Recipient is required.")
+        return cleaned
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v: Optional[str]) -> Optional[str]:
+        return v.strip() if v and v.strip() else None

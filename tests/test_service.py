@@ -84,6 +84,9 @@ def test_score_returns_the_agreed_contract(client):
     assert r.status_code == 200
     b = r.json()
     assert 0.0 <= b["fraud_probability"] <= 1.0
+    assert 0.0 <= b["raw_fraud_probability"] <= 1.0
+    assert b["fraud_probability"] == b["calibrated_fraud_probability"]
+    assert b["scoring_latency_ms"] >= 0
     assert b["decision"] in ("APPROVE", "STEP_UP", "REVIEW", "DECLINE")
     assert set(b["expected_costs"]) == {"approve", "step_up", "review", "decline"}
     assert 1 <= len(b["top_factors"]) <= 10
@@ -126,6 +129,14 @@ def test_missing_amount_is_a_400(client):
     assert r.status_code == 400 and r.json()["error"] == "amount_required"
 
 
+def test_decision_amount_must_match_feature_amount(client):
+    r = client.post("/score", json={
+        **SUSPICIOUS,
+        "amount": SUSPICIOUS["amount"] + 1,
+    })
+    assert r.status_code == 400 and r.json()["error"] == "amount_mismatch"
+
+
 def test_unknown_feature_name_is_a_400(client):
     r = client.post("/score", json={"amount": 100, "features": {"amount": 100, "not_a_feature": 1}})
     assert r.status_code == 400
@@ -145,3 +156,26 @@ def test_bad_policy_value_is_a_400(client):
 def test_schema_lists_features_and_default_policy(client):
     b = client.get("/schema").json()
     assert b["features"] == FEATURE_COLUMNS and "review_cost" in b["default_policy"]
+
+
+def test_production_model_scores_held_out_labeled_rows():
+    demo_path = Path(__file__).resolve().parent.parent / "demo_rows.json"
+    model_dir = Path(__file__).resolve().parent.parent / "artifacts"
+    demo = json.loads(demo_path.read_text(encoding="utf-8"))
+    with TestClient(fresh_service(model_dir, "serve_production").app) as production:
+        assert production.get("/health").status_code == 200
+        assert production.get("/schema").json()["features"] == FEATURE_COLUMNS
+        for category in ("normal", "suspicious"):
+            row = demo[category][0]
+            response = production.post("/score", json={
+                "transaction_id": f"heldout-{category}",
+                "amount": row["amount"],
+                "features": row["features"],
+            })
+            assert response.status_code == 200, response.text
+            result = response.json()
+            assert result["decision"] == row["decision"]
+            assert result["fraud_probability"] == pytest.approx(row["model_probability"], abs=1e-6)
+            assert 0 <= result["raw_fraud_probability"] <= 1
+            assert result["calibrated_fraud_probability"] == result["fraud_probability"]
+            assert result["scoring_latency_ms"] >= 0

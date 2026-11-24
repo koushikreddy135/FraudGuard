@@ -4,9 +4,11 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 from typing import List
 
-# Automatically load .env file from project root
-env_path = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(dotenv_path=env_path)
+# Automatically load environment configuration from the project root.
+# Keep support for the conventional .env name while accepting api.env.
+project_root = Path(__file__).resolve().parent.parent
+load_dotenv(dotenv_path=project_root / ".env")
+load_dotenv(dotenv_path=project_root / "api.env")
 
 class Settings(BaseModel):
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
@@ -37,6 +39,9 @@ class Settings(BaseModel):
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
     GOOGLE_REDIRECT_URI: str = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/api/auth/oauth/google/callback")
+
+    ML_SERVICE_URL: str = os.getenv("ML_SERVICE_URL", "http://127.0.0.1:8000")
+    ML_SERVICE_TIMEOUT_SECONDS: float = float(os.getenv("ML_SERVICE_TIMEOUT_SECONDS", "5"))
 
     # Trusted CORS Frontend Origins
     CORS_ORIGINS: List[str] = [

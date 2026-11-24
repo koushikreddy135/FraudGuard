@@ -21,6 +21,7 @@ GET  /schema  feature names + default policy
 import json, os, warnings
 from contextlib import asynccontextmanager
 from pathlib import Path
+import time
 from typing import Dict, List, Optional
 
 import joblib
@@ -33,6 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
+from features import FEATURE_COLUMNS
 from policy import DEFAULT_COST_PARAMS, decide_one
 from backend.config import settings
 from backend.database import init_db
@@ -135,6 +137,9 @@ class TopFactor(BaseModel):
 class ScoreResponse(BaseModel):
     transaction_id: Optional[str] = None
     fraud_probability: float
+    raw_fraud_probability: float
+    calibrated_fraud_probability: float
+    scoring_latency_ms: float
     decision: str
     expected_costs: Dict[str, float]
     top_factors: List[TopFactor]
@@ -168,13 +173,13 @@ def _vector(features: Dict[str, Optional[float]]) -> np.ndarray:
 
 def _predict(features: Dict[str, Optional[float]]):
     x = _vector(features)
-    raw = STATE["booster"].predict(x)
-    prob = float(STATE["calibrator"].predict(raw)[0])
+    raw = float(STATE["booster"].predict(x)[0])
+    prob = float(STATE["calibrator"].predict([raw])[0])
     contrib = STATE["booster"].predict(x, pred_contrib=True)[0][:-1]       # last column is the baseline
     order = np.argsort(-np.abs(contrib))[:10]
     factors = [{"feature": STATE["names"][j], "impact": round(float(contrib[j]), 4),
                 "value": None if np.isnan(x[0, j]) else round(float(x[0, j]), 4)} for j in order]
-    return prob, factors                      # unrounded: decisions must use the exact probability
+    return raw, prob, factors                 # unrounded: decisions must use the exact probability
 
 
 def load():
@@ -183,7 +188,20 @@ def load():
         if not schema.exists():
             schema = MODEL_DIR / "feature_names.json"          # older artifacts folders
         STATE["names"] = json.loads(schema.read_text())
-        STATE["booster"] = lgb.Booster(model_file=str(MODEL_DIR / "model.txt"))
+        # LightGBM's tree_sizes metadata is byte-based; Git's Windows CRLF checkout
+        # invalidates those offsets when the model is loaded directly from disk.
+        model_text = (MODEL_DIR / "model.txt").read_text(encoding="utf-8")
+        STATE["booster"] = lgb.Booster(model_str=model_text)
+        if (
+            STATE["names"] != FEATURE_COLUMNS
+            or len(STATE["names"]) != len(set(STATE["names"]))
+            or len(STATE["names"]) != STATE["booster"].num_feature()
+        ):
+            raise ValueError("Model feature schema does not match the required 22-feature contract.")
+        booster_names = STATE["booster"].feature_name()
+        default_names = [f"Column_{index}" for index in range(len(STATE["names"]))]
+        if booster_names not in (STATE["names"], default_names):
+            raise ValueError("Model feature names or order do not match the feature schema.")
         STATE["calibrator"] = joblib.load(MODEL_DIR / "calibrator.joblib")
         STATE["version"] = (MODEL_DIR / "VERSION").read_text().strip()
         cost = dict(DEFAULT_COST_PARAMS)
@@ -236,18 +254,29 @@ def score(req: ScoreRequest):
     amount = req.amount if req.amount is not None else req.features.get("amount")
     if amount is None or amount <= 0:
         raise _error(400, "amount_required", "send 'amount' (> 0), or features.amount")
+    feature_amount = req.features.get("amount")
+    if feature_amount is not None and not np.isclose(float(feature_amount), float(amount), rtol=0, atol=1e-9):
+        raise _error(400, "amount_mismatch", "'amount' must match features.amount")
 
     cost = dict(STATE["cost"])
     if req.policy:
         for api_key, value in req.policy.model_dump(exclude_none=True).items():
             cost[POLICY_KEYS[api_key]] = value
 
-    prob, factors = _predict(req.features)
-    action, costs = decide_one(prob, amount, cost, queue_length=req.queue_length)
+    scoring_started = time.perf_counter()
+    raw_probability, calibrated_probability, factors = _predict(req.features)
+    action, costs = decide_one(calibrated_probability, amount, cost, queue_length=req.queue_length)
+    scoring_latency_ms = (time.perf_counter() - scoring_started) * 1000
     # Plain-English reasons only make sense when we are NOT simply approving.
     reasons = ([] if action == "APPROVE" else
                [reason_for(f["feature"]) for f in factors if f["impact"] > 0.2][:3])
-    return {"transaction_id": req.transaction_id, "fraud_probability": round(prob, 6), "decision": action,
+    return {
+            "transaction_id": req.transaction_id,
+            "fraud_probability": calibrated_probability,
+            "raw_fraud_probability": raw_probability,
+            "calibrated_fraud_probability": calibrated_probability,
+            "scoring_latency_ms": scoring_latency_ms,
+            "decision": action,
             "expected_costs": {DECISION_KEYS[k]: v for k, v in costs.items()},
             "top_factors": factors, "reasons": reasons, "model_version": STATE["version"]}
 

@@ -12,6 +12,13 @@ interface CustomerDashboardData {
     account_tier: string;
     security_status: string;
     last_login: string;
+    account: {
+      id: string;
+      balance: number;
+      balance_cents: number;
+      currency: string;
+      simulated: boolean;
+    };
   };
   notifications: Array<{
     id: string;
@@ -106,11 +113,16 @@ export const CustomerDashboard: React.FC = () => {
             Protected Balance
           </div>
           <div style={{ fontSize: '34px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '16px' }}>
-            $124,580.00
+            {_data?.user.account
+              ? `$${_data.user.account.balance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : 'Loading...'}
+          </div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '10px' }}>
+            Simulated funds
           </div>
           <div style={{ display: 'flex', gap: '10px' }}>
             <button
-              onClick={() => alert("Transfer initiated: Next phase will run LightGBM scoring on the transfer parameters.")}
+              onClick={() => window.location.assign('/customer/transfers')}
               style={{
                 flex: 1,
                 display: 'flex',
@@ -129,7 +141,7 @@ export const CustomerDashboard: React.FC = () => {
               <ArrowUpRight size={16} /> Send Money
             </button>
             <button
-              onClick={() => alert("Deposit funds")}
+              disabled
               style={{
                 flex: 1,
                 display: 'flex',

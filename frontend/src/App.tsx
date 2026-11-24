@@ -12,6 +12,7 @@ import { CustomerLogin } from './pages/customer/CustomerLogin';
 import { CustomerRegister } from './pages/customer/CustomerRegister';
 import { CustomerForgotPassword } from './pages/customer/CustomerForgotPassword';
 import { CustomerDashboard } from './pages/customer/CustomerDashboard';
+import { CustomerTransfers } from './pages/customer/CustomerTransfers';
 import { AuthCallback } from './pages/auth/AuthCallback';
 
 // Admin Pages
@@ -46,6 +47,7 @@ export const App: React.FC = () => {
           <Route element={<ProtectedRoute allowedRole="CUSTOMER" redirectTo="/login" />}>
             <Route path="/customer" element={<CustomerLayout />}>
               <Route index element={<CustomerDashboard />} />
+              <Route path="transfers" element={<CustomerTransfers />} />
             </Route>
           </Route>
 
