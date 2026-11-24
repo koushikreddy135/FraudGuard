@@ -48,11 +48,19 @@ pipeline {
             }
         }
 
-        stage('Run Tests') {
+        stage('Unit Tests') {
             steps {
-                // Builds the Dockerfile `test` target and runs pytest (58 tests)
-                bat 'docker build --target test -t fraudguard-test:%BUILD_NUMBER% .'
-                bat 'docker run --rm fraudguard-test:%BUILD_NUMBER%'
+                echo 'Running backend unit tests with pytest in the Docker test image.'
+                bat '''
+                    if not exist test-results mkdir test-results
+                    docker build --target test -t fraudguard-test:%BUILD_NUMBER% .
+                    docker run --rm --mount "type=bind,source=%WORKSPACE%/test-results,target=/reports" fraudguard-test:%BUILD_NUMBER% python -m pytest tests -q --junitxml=/reports/pytest-results.xml
+                '''
+            }
+            post {
+                always {
+                    junit 'test-results/pytest-results.xml'
+                }
             }
         }
 
