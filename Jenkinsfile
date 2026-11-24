@@ -1,9 +1,10 @@
 // FraudGuard CI/CD for Jenkins running natively on WINDOWS (uses `bat` / `powershell` steps).
 //
-// GitHub push -> webhook -> Jenkins -> pytest (inside Docker) -> docker build -> docker compose up -> health check
+// GitHub push -> webhook -> Jenkins -> pytest (inside Docker) -> build backend + frontend images
+// -> docker compose up -> health check
 //
 // Needs on the PC: Docker Desktop (running, Linux containers) and Git. Python, Node and kubectl are
-// NOT needed: tests and the frontend build run inside Docker.
+// NOT needed: tests and the frontend build run inside Docker. The frontend and backend run in separate containers.
 // The job deploys whichever branch it is configured to watch (Branch Specifier in the job).
 
 pipeline {
@@ -22,7 +23,8 @@ pipeline {
     }
 
     environment {
-        IMAGE_NAME           = 'fraudguard-app'
+        BACKEND_IMAGE        = 'fraudguard-backend'
+        FRONTEND_IMAGE       = 'fraudguard-frontend'
         SECRET_CRED          = 'fraudguard-secret-key' // Jenkins: Secret text (64 hex characters)
         COMPOSE_PROJECT_NAME = 'fraudguard'
         DOCKER_BUILDKIT      = '1'
@@ -41,7 +43,7 @@ pipeline {
                 script {
                     def sha = bat(script: '@git rev-parse --short HEAD', returnStdout: true).trim()
                     env.IMAGE_TAG = "${env.BUILD_NUMBER}-${sha}"
-                    echo "Building ${env.IMAGE_NAME}:${env.IMAGE_TAG}"
+                    echo "Building ${env.BACKEND_IMAGE}:${env.IMAGE_TAG} and ${env.FRONTEND_IMAGE}:${env.IMAGE_TAG}"
                 }
             }
         }
@@ -54,10 +56,10 @@ pipeline {
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Build Docker Images') {
             steps {
-                // The React build (tsc + vite) happens inside the Dockerfile
-                bat 'docker build -t %IMAGE_NAME%:%IMAGE_TAG% -t %IMAGE_NAME%:latest .'
+                bat 'docker build --target backend-runtime -t %BACKEND_IMAGE%:%IMAGE_TAG% -t %BACKEND_IMAGE%:latest .'
+                bat 'docker build --target frontend-runtime -t %FRONTEND_IMAGE%:%IMAGE_TAG% -t %FRONTEND_IMAGE%:latest .'
             }
         }
 
@@ -65,7 +67,7 @@ pipeline {
             steps {
                 withCredentials([string(credentialsId: env.SECRET_CRED, variable: 'SECRET_KEY')]) {
                     bat '''
-                        set IMAGE=%IMAGE_NAME%
+                        docker compose down --remove-orphans
                         docker compose up -d --no-build
                     '''
                 }
@@ -74,30 +76,32 @@ pipeline {
 
         stage('Smoke Test') {
             steps {
-                // Wait for the container HEALTHCHECK (/health = 200 once the model has loaded)
+                // Wait for backend model readiness and for the frontend web server to respond.
                 powershell '''
-                    $containerId = docker compose ps -q fraudguard
+                    $backendId = ([string](docker compose ps -q backend)).Trim()
+                    $frontendId = ([string](docker compose ps -q frontend)).Trim()
 
-                    if (-not $containerId) {
-                        Write-Host "FraudGuard container was not found."
-                        docker compose logs --tail 100 fraudguard
+                    if (-not $backendId -or -not $frontendId) {
+                        Write-Host "FraudGuard backend or frontend container was not found."
+                        docker compose logs --tail 100 backend frontend
                         exit 1
                     }
 
                     for ($i = 0; $i -lt 30; $i++) {
-                        $health = docker inspect -f "{{.State.Health.Status}}" $containerId 2>$null
+                        $backendHealth = docker inspect -f "{{.State.Health.Status}}" $backendId 2>$null
+                        $frontendHealth = docker inspect -f "{{.State.Health.Status}}" $frontendId 2>$null
 
-                        Write-Host "Health status: $health"
+                        Write-Host "Backend health: $backendHealth; frontend health: $frontendHealth"
 
-                        if ($health -eq "healthy") {
-                            Write-Host "FraudGuard is healthy!"
+                        if ($backendHealth -eq "healthy" -and $frontendHealth -eq "healthy") {
+                            Write-Host "FraudGuard backend and frontend are healthy!"
                             exit 0
                         }
 
                         Start-Sleep -Seconds 5
                     }
 
-                    docker compose logs --tail 100 fraudguard
+                    docker compose logs --tail 100 backend frontend
                     exit 1
                  '''
             }
@@ -105,7 +109,7 @@ pipeline {
     }
 
     post {
-        success { echo "FraudGuard deployed: ${env.IMAGE_NAME}:${env.IMAGE_TAG} -> http://localhost:8000" }
+        success { echo "FraudGuard deployed: ${env.BACKEND_IMAGE}:${env.IMAGE_TAG} + ${env.FRONTEND_IMAGE}:${env.IMAGE_TAG} -> http://localhost:8000" }
         failure { echo 'FraudGuard pipeline failed. Check the failing stage in the console output.' }
         always  { bat(script: 'docker image prune -f', returnStatus: true) }
     }

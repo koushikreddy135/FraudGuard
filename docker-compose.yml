@@ -1,18 +1,19 @@
 # Run locally (PowerShell):
 #   $env:SECRET_KEY = "<64 hex characters>"
 #   docker compose up --build -d
-# Jenkins deploy: IMAGE / IMAGE_TAG / SECRET_KEY are provided by the Jenkinsfile.
+#   Frontend: http://localhost:8000 | Backend API: http://localhost:8001
+# Jenkins deploy: BACKEND_IMAGE / FRONTEND_IMAGE / IMAGE_TAG / SECRET_KEY are provided by Jenkins.
 
 services:
-  fraudguard:
-    image: ${IMAGE:-fraudguard-app}:${IMAGE_TAG:-latest}
+  backend:
+    image: ${BACKEND_IMAGE:-fraudguard-backend}:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
-    # No container_name: Docker Compose manages container names
+      target: backend-runtime
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set (64 hex characters)}
       ENVIRONMENT: ${ENVIRONMENT:-production}
@@ -35,6 +36,24 @@ services:
       timeout: 5s
       retries: 3
       start_period: 40s
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-fraudguard-frontend}:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend-runtime
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8000:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   fraudguard_data:

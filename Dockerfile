@@ -1,7 +1,8 @@
 # ==============================================================================
-# FraudGuard Dockerfile: React frontend + FastAPI / LightGBM backend in ONE image
+# FraudGuard Dockerfile: separate frontend and backend runtime image targets
 #
-#   docker build -t fraudguard-app .                      -> runtime image (last stage = default)
+#   docker build --target backend-runtime -t fraudguard-backend .
+#   docker build --target frontend-runtime -t fraudguard-frontend .
 #   docker build --target test -t fraudguard-test .       -> image that runs pytest (used by Jenkins)
 # ==============================================================================
 
@@ -54,11 +55,13 @@ ENV GOOGLE_CLIENT_ID=ci-dummy-client-id \
     GOOGLE_CLIENT_SECRET=ci-dummy-secret
 CMD ["python", "-m", "pytest", "tests", "-q"]
 
-# Stage 4: Runtime image (keep this LAST so it is the default target)
-FROM base AS runtime
+# Stage 4: Frontend runtime image
+FROM nginx:alpine AS frontend-runtime
+COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Built frontend assets (serve.py serves frontend/dist)
-COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
+# Stage 5: Backend runtime image (keep this LAST so it is the default target)
+FROM base AS backend-runtime
 
 # SECRET_KEY is NOT set here on purpose: pass it at run time (docker-compose.yml requires it).
 ENV ENVIRONMENT=production \
