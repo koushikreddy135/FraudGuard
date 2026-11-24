@@ -73,7 +73,8 @@ export const AdminLayout: React.FC = () => {
               fontWeight: 600,
               fontSize: '13px',
               textAlign: 'left',
-              width: '100%'
+              width: '100%',
+              cursor: 'pointer'
             }}
           >
             <Activity size={17} />
@@ -94,9 +95,9 @@ export const AdminLayout: React.FC = () => {
               fontSize: '13px',
               textAlign: 'left',
               width: '100%',
-              opacity: 0.7
+              cursor: 'pointer'
             }}
-            onClick={() => alert("Model Ops & Re-training Gate will be integrated in Phase 2.")}
+            onClick={() => navigate('/admin')}
           >
             <Cpu size={17} />
             Model Ops & Health
@@ -116,9 +117,9 @@ export const AdminLayout: React.FC = () => {
               fontSize: '13px',
               textAlign: 'left',
               width: '100%',
-              opacity: 0.7
+              cursor: 'pointer'
             }}
-            onClick={() => alert("Fraud Investigation Queue will be integrated in Phase 2.")}
+            onClick={() => navigate('/admin')}
           >
             <Terminal size={17} />
             Investigation Queue
@@ -138,9 +139,9 @@ export const AdminLayout: React.FC = () => {
               fontSize: '13px',
               textAlign: 'left',
               width: '100%',
-              opacity: 0.7
+              cursor: 'pointer'
             }}
-            onClick={() => alert("Audit Logs table is displayed on the main security overview.")}
+            onClick={() => navigate('/admin')}
           >
             <FileText size={17} />
             Audit Records

@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraudguard-deployment
+  labels:
+    app: fraudguard
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fraudguard
+  template:
+    metadata:
+      labels:
+        app: fraudguard
+    spec:
+      containers:
+        - name: fraudguard-app
+          image: fraudguard-app:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: fraudguard-config
+            - secretRef:
+                name: fraudguard-secrets
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: persistent-storage
+              mountPath: /app/data
+      volumes:
+        - name: persistent-storage
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fraudguard-service
+  labels:
+    app: fraudguard
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: fraudguard

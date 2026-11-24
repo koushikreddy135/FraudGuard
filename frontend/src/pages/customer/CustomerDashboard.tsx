@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { apiRequest } from '../../services/api';
-import { ShieldCheck, ArrowUpRight, ArrowDownLeft, Lock, CheckCircle2 } from 'lucide-react';
+import { ShieldCheck, ArrowUpRight, ArrowDownLeft, Lock, CheckCircle2, X } from 'lucide-react';
 
 interface CustomerDashboardData {
   status: string;
@@ -31,12 +31,52 @@ interface CustomerDashboardData {
 export const CustomerDashboard: React.FC = () => {
   const { user } = useAuth();
   const [_data, setData] = useState<CustomerDashboardData | null>(null);
+  const [showAddFunds, setShowAddFunds] = useState(false);
+  const [fundAmount, setFundAmount] = useState('500');
+  const [funding, setFunding] = useState(false);
+  const [fundError, setFundError] = useState<string | null>(null);
+  const [fundSuccess, setFundSuccess] = useState<string | null>(null);
 
-  useEffect(() => {
+  const fetchDashboardData = () => {
     apiRequest<CustomerDashboardData>('/api/customer/dashboard')
       .then(setData)
       .catch((err) => console.error("Error loading customer overview:", err));
+  };
+
+  useEffect(() => {
+    fetchDashboardData();
   }, []);
+
+  const handleAddFundsSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFundError(null);
+    setFundSuccess(null);
+    const parsed = parseFloat(fundAmount);
+    if (isNaN(parsed) || parsed <= 0) {
+      setFundError('Please enter a valid amount greater than $0.');
+      return;
+    }
+    setFunding(true);
+    try {
+      const res = await apiRequest<{ success: boolean; new_balance: number; amount: number }>(
+        '/api/customer/add-funds',
+        {
+          method: 'POST',
+          body: JSON.stringify({ amount: parsed }),
+        }
+      );
+      setFundSuccess(`Successfully added $${res.amount.toFixed(2)} to your balance!`);
+      fetchDashboardData();
+      setTimeout(() => {
+        setShowAddFunds(false);
+        setFundSuccess(null);
+      }, 1500);
+    } catch (err: any) {
+      setFundError(err?.message || 'Failed to add funds.');
+    } finally {
+      setFunding(false);
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
@@ -135,13 +175,18 @@ export const CustomerDashboard: React.FC = () => {
                 color: '#FFFFFF',
                 border: 'none',
                 fontWeight: 600,
-                fontSize: '13px'
+                fontSize: '13px',
+                cursor: 'pointer'
               }}
             >
               <ArrowUpRight size={16} /> Send Money
             </button>
             <button
-              disabled
+              onClick={() => {
+                setFundError(null);
+                setFundSuccess(null);
+                setShowAddFunds(true);
+              }}
               style={{
                 flex: 1,
                 display: 'flex',
@@ -154,7 +199,8 @@ export const CustomerDashboard: React.FC = () => {
                 color: 'var(--text-primary)',
                 border: '1px solid var(--border-color)',
                 fontWeight: 600,
-                fontSize: '13px'
+                fontSize: '13px',
+                cursor: 'pointer'
               }}
             >
               <ArrowDownLeft size={16} /> Add Funds
@@ -263,6 +309,162 @@ export const CustomerDashboard: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Add Funds Modal */}
+      {showAddFunds && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 999
+        }}>
+          <div style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: 'var(--radius-md)',
+            padding: '24px',
+            width: '100%',
+            maxWidth: '420px',
+            border: '1px solid var(--border-color)',
+            boxShadow: 'var(--shadow-lg, 0 10px 15px -3px rgba(0,0,0,0.1))'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <ArrowDownLeft size={20} color="var(--primary)" />
+                <h3 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
+                  Add Funds (Simulated)
+                </h3>
+              </div>
+              <button
+                onClick={() => setShowAddFunds(false)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px', lineHeight: 1.4 }}>
+              Top up your simulated checking account to test transfers and fraud scoring capabilities.
+            </p>
+
+            {fundError && (
+              <div style={{
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: '#FEF2F2',
+                color: '#B91C1C',
+                fontSize: '13px',
+                marginBottom: '14px'
+              }}>
+                {fundError}
+              </div>
+            )}
+
+            {fundSuccess && (
+              <div style={{
+                padding: '10px 12px',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: '#ECFDF5',
+                color: '#065F46',
+                fontSize: '13px',
+                marginBottom: '14px'
+              }}>
+                {fundSuccess}
+              </div>
+            )}
+
+            <form onSubmit={handleAddFundsSubmit}>
+              <div style={{ marginBottom: '16px' }}>
+                <label style={{ display: 'block', fontSize: '13px', fontWeight: 600, marginBottom: '6px', color: 'var(--text-primary)' }}>
+                  Amount ($ USD)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="1"
+                  value={fundAmount}
+                  onChange={(e) => setFundAmount(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border-color)',
+                    fontSize: '15px',
+                    fontWeight: 600,
+                    outline: 'none',
+                    boxSizing: 'border-box'
+                  }}
+                  required
+                />
+              </div>
+
+              {/* Quick preset buttons */}
+              <div style={{ display: 'flex', gap: '8px', marginBottom: '20px' }}>
+                {['100', '500', '1000', '5000'].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setFundAmount(preset)}
+                    style={{
+                      flex: 1,
+                      padding: '6px',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: fundAmount === preset ? 'var(--accent)' : 'var(--bg-card-subtle)',
+                      border: '1px solid var(--border-color)',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      color: fundAmount === preset ? 'var(--primary)' : 'var(--text-secondary)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    +${preset}
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowAddFunds(false)}
+                  style={{
+                    padding: '10px 16px',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'transparent',
+                    border: '1px solid var(--border-color)',
+                    color: 'var(--text-secondary)',
+                    fontWeight: 600,
+                    fontSize: '13px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={funding}
+                  style={{
+                    padding: '10px 20px',
+                    borderRadius: 'var(--radius-sm)',
+                    backgroundColor: 'var(--primary)',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    fontWeight: 600,
+                    fontSize: '13px',
+                    cursor: funding ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  {funding ? 'Adding...' : 'Confirm Deposit'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

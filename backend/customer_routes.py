@@ -11,8 +11,10 @@ import httpx
 
 from backend.middleware import require_role
 from backend.database import get_db
-from backend.schemas import TransferRequest
+from backend.schemas import TransferRequest, StepUpVerifyRequest, ChangePasswordRequest
 from backend.config import settings
+from backend.security import hash_password, verify_password, hash_token, generate_secure_otp
+from backend.email_service import send_otp_email
 from features import FEATURE_COLUMNS
 
 router = APIRouter(prefix="/api/customer", tags=["Customer Portal"])
@@ -432,6 +434,21 @@ async def create_transfer(req: TransferRequest, user: dict = Depends(require_rol
             f"{decision} transfer {transaction_id} for {amount_cents / 100:.2f}",
             current_time,
         ))
+
+        # If decision is STEP_UP, generate a verification OTP and send to the customer's email
+        if decision == "STEP_UP":
+            stepup_otp = generate_secure_otp()
+            stepup_hash = hash_token(stepup_otp)
+            otp_expires = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+            cursor.execute("""
+                INSERT INTO password_reset_otps (id, user_id, otp_hash, expires_at, attempts_left, is_used, created_at)
+                VALUES (?, ?, ?, ?, 5, 0, ?)
+            """, (f"otp_{uuid.uuid4().hex}", user["id"], stepup_hash, otp_expires, current_time))
+            try:
+                send_otp_email(user["email"], stepup_otp)
+            except Exception as e:
+                logger.error("Failed to deliver step-up verification email: %s", e)
+
         created = cursor.execute("SELECT * FROM transactions WHERE id = ?", (transaction_id,)).fetchone()
 
     return _serialize_transaction(created)
@@ -487,6 +504,50 @@ async def list_customer_transfers(
         result.append(item)
     return {"transactions": result}
 
+@router.post("/add-funds")
+async def add_funds(req: dict, user: dict = Depends(require_role(["CUSTOMER"]))):
+    """
+    Simulated fund top-up. Adds the requested amount to the customer's account balance.
+    No artificial deposit limits.
+    """
+    amount = req.get("amount")
+    if amount is None or not isinstance(amount, (int, float)):
+        raise HTTPException(status_code=422, detail="amount is required and must be a number.")
+
+    amount_cents = _centify(float(amount))
+    if amount_cents <= 0:
+        raise HTTPException(status_code=422, detail="Amount must be greater than zero.")
+
+    now = _utc_now()
+    deposit_id = f"dep_{uuid.uuid4().hex}"
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+        account = cursor.execute(
+            "SELECT * FROM accounts WHERE user_id = ?", (user["id"],)
+        ).fetchone()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found.")
+        new_balance_cents = account["balance_cents"] + amount_cents
+        cursor.execute(
+            "UPDATE accounts SET balance_cents = ?, updated_at = ? WHERE id = ?",
+            (new_balance_cents, now, account["id"])
+        )
+        cursor.execute(
+            "INSERT INTO audit_logs (id, user_id, action, details, created_at) VALUES (?, ?, 'ADD_FUNDS', ?, ?)",
+            (f"aud_{uuid.uuid4().hex}", user["id"], f"Deposited ${amount_cents / 100:.2f} simulated funds", now)
+        )
+
+    return {
+        "success": True,
+        "deposit_id": deposit_id,
+        "amount": amount_cents / 100,
+        "new_balance": new_balance_cents / 100,
+        "currency": account["currency"],
+    }
+
+
 @router.get("/dashboard")
 async def get_customer_dashboard(user: dict = Depends(require_role(["CUSTOMER"]))):
     """
@@ -532,3 +593,120 @@ async def get_customer_dashboard(user: dict = Depends(require_role(["CUSTOMER"])
             }
         ]
     }
+
+
+@router.post("/transfers/verify-stepup")
+async def verify_stepup_transfer(req: StepUpVerifyRequest, user: dict = Depends(require_role(["CUSTOMER"]))):
+    """
+    Submits OTP verification for a transaction held in REQUIRES_VERIFICATION (STEP_UP).
+    If valid, finalizes atomic debit/credit transfer.
+    """
+    now = _utc_now()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+
+        tx = cursor.execute(
+            "SELECT * FROM transactions WHERE id = ? AND sender_id = ?",
+            (req.transaction_id, user["id"])
+        ).fetchone()
+        if not tx:
+            raise HTTPException(status_code=404, detail="Transaction not found.")
+        if tx["status"] != "REQUIRES_VERIFICATION":
+            raise HTTPException(status_code=400, detail=f"Transaction is in status {tx['status']}, not awaiting verification.")
+
+        # Check latest active OTP for user
+        otp_row = cursor.execute("""
+            SELECT * FROM password_reset_otps
+            WHERE user_id = ? AND is_used = 0 AND expires_at > ?
+            ORDER BY created_at DESC LIMIT 1
+        """, (user["id"], now)).fetchone()
+
+        if not otp_row:
+            raise HTTPException(status_code=400, detail="No active verification code found. Please initiate a new transfer.")
+
+        if otp_row["attempts_left"] <= 0:
+            raise HTTPException(status_code=400, detail="Maximum verification attempts exceeded.")
+
+        if hash_token(req.otp) != otp_row["otp_hash"]:
+            cursor.execute("""
+                UPDATE password_reset_otps SET attempts_left = attempts_left - 1 WHERE id = ?
+            """, (otp_row["id"],))
+            raise HTTPException(status_code=400, detail=f"Invalid OTP code. {otp_row['attempts_left'] - 1} attempts remaining.")
+
+        # Mark OTP used
+        cursor.execute("UPDATE password_reset_otps SET is_used = 1 WHERE id = ?", (otp_row["id"],))
+
+        # Perform atomic transfer
+        amount_cents = tx["amount_cents"]
+        sender_account = cursor.execute("SELECT * FROM accounts WHERE user_id = ?", (user["id"],)).fetchone()
+        recipient_account = cursor.execute("SELECT * FROM accounts WHERE user_id = ?", (tx["recipient_id"],)).fetchone()
+
+        if not sender_account or not recipient_account:
+            raise HTTPException(status_code=400, detail="Account unavailable.")
+        if sender_account["balance_cents"] < amount_cents:
+            cursor.execute("UPDATE transactions SET status = 'FAILED_INSUFFICIENT_FUNDS', updated_at = ? WHERE id = ?", (now, tx["id"]))
+            raise HTTPException(status_code=400, detail="Insufficient account balance to settle transfer.")
+
+        sender_before = sender_account["balance_cents"]
+        sender_after = sender_before - amount_cents
+        recipient_before = recipient_account["balance_cents"]
+        recipient_after = recipient_before + amount_cents
+
+        cursor.execute("UPDATE accounts SET balance_cents = ?, updated_at = ? WHERE id = ?", (sender_after, now, sender_account["id"]))
+        cursor.execute("UPDATE accounts SET balance_cents = ?, updated_at = ? WHERE id = ?", (recipient_after, now, recipient_account["id"]))
+
+        cursor.executemany("""
+            INSERT INTO ledger_entries (id, transaction_id, account_id, entry_type, amount_cents, balance_before_cents, balance_after_cents, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            (f"led_{uuid.uuid4().hex}", tx["id"], sender_account["id"], "DEBIT", amount_cents, sender_before, sender_after, now),
+            (f"led_{uuid.uuid4().hex}", tx["id"], recipient_account["id"], "CREDIT", amount_cents, recipient_before, recipient_after, now)
+        ])
+
+        cursor.execute("""
+            UPDATE transactions SET
+                status = 'COMPLETED',
+                decision = 'VERIFIED_STEP_UP',
+                sender_balance_after_cents = ?,
+                recipient_balance_after_cents = ?,
+                updated_at = ?
+            WHERE id = ?
+        """, (sender_after, recipient_after, now, tx["id"]))
+
+        cursor.execute("""
+            INSERT INTO audit_logs (id, user_id, action, details, created_at)
+            VALUES (?, ?, 'STEP_UP_VERIFIED', ?, ?)
+        """, (f"aud_{uuid.uuid4().hex}", user["id"], f"Customer verified step-up OTP for transfer {tx['id']}", now))
+
+    return {"success": True, "status": "COMPLETED", "message": "Verification confirmed! Funds transferred successfully."}
+
+
+@router.post("/security/change-password")
+async def customer_change_password(req: ChangePasswordRequest, user: dict = Depends(require_role(["CUSTOMER"]))):
+    """
+    Allows authenticated customer to safely change their login password.
+    """
+    now = _utc_now()
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("BEGIN IMMEDIATE")
+        user_row = cursor.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        if not user_row:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        if not verify_password(req.current_password, user_row["password_hash"]):
+            raise HTTPException(status_code=400, detail="Current password is incorrect.")
+
+        new_hash = hash_password(req.new_password)
+        cursor.execute("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?", (new_hash, now, user["id"]))
+
+        # Revoke other active sessions for security
+        cursor.execute("UPDATE sessions SET is_revoked = 1 WHERE user_id = ?", (user["id"],))
+
+        cursor.execute("""
+            INSERT INTO audit_logs (id, user_id, action, details, created_at)
+            VALUES (?, ?, 'PASSWORD_CHANGED', ?, ?)
+        """, (f"aud_{uuid.uuid4().hex}", user["id"], "Customer updated account security password", now))
+
+    return {"success": True, "message": "Password changed successfully. Your account is secured."}

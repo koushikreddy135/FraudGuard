@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fraudguard-config
+  labels:
+    app: fraudguard
+data:
+  ENVIRONMENT: "production"
+  MODEL_DIR: "artifacts"
+  ML_SERVICE_URL: "http://localhost:8000"
+  CORS_ORIGINS: '["http://localhost:8000","http://127.0.0.1:8000"]'

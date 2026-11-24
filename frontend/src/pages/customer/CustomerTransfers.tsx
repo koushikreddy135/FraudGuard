@@ -46,6 +46,10 @@ export const CustomerTransfers: React.FC = () => {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [decisionFilter, setDecisionFilter] = useState('');
+  const [stepUpTxId, setStepUpTxId] = useState<string | null>(null);
+  const [stepUpOtp, setStepUpOtp] = useState('');
+  const [verifyingOtp, setVerifyingOtp] = useState(false);
+  const [otpError, setOtpError] = useState('');
   const idempotencyKeyRef = useRef<string | null>(null);
 
   const loadData = async () => {
@@ -110,11 +114,16 @@ export const CustomerTransfers: React.FC = () => {
         }),
       });
       idempotencyKeyRef.current = null;
-      setMessage(
-        result.status === 'COMPLETED'
-          ? `Transfer approved and completed. Transaction ${result.id}.`
-          : `Transfer recorded with status ${result.status.replaceAll('_', ' ').toLowerCase()} (${result.decision}).`
-      );
+      if (result.status === 'REQUIRES_VERIFICATION') {
+        setStepUpTxId(result.id);
+        setMessage('Transfer requires multi-factor identity verification. Please enter the OTP sent to your email.');
+      } else {
+        setMessage(
+          result.status === 'COMPLETED'
+            ? `Transfer approved and completed. Transaction ${result.id}.`
+            : `Transfer recorded with status ${result.status.replaceAll('_', ' ').toLowerCase()} (${result.decision}).`
+        );
+      }
       setReviewing(false);
       setRecipient('');
       setAmount('');
@@ -125,6 +134,30 @@ export const CustomerTransfers: React.FC = () => {
       setReviewing(false);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleVerifyStepUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stepUpTxId || stepUpOtp.length !== 6) {
+      setOtpError('Please enter a valid 6-digit OTP code.');
+      return;
+    }
+    setVerifyingOtp(true);
+    setOtpError('');
+    try {
+      const res = await apiRequest<{ success: boolean; message: string }>('/api/customer/transfers/verify-stepup', {
+        method: 'POST',
+        body: JSON.stringify({ transaction_id: stepUpTxId, otp: stepUpOtp }),
+      });
+      setMessage(res.message);
+      setStepUpTxId(null);
+      setStepUpOtp('');
+      await loadData();
+    } catch (err: any) {
+      setOtpError(err.message || 'Verification failed.');
+    } finally {
+      setVerifyingOtp(false);
     }
   };
 
@@ -144,6 +177,106 @@ export const CustomerTransfers: React.FC = () => {
 
       {error && <div role="alert" style={{ padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid #FCA5A5', background: '#FEF2F2', color: '#991B1B', fontSize: '13px' }}>{error}</div>}
       {message && <div role="status" style={{ padding: '12px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid #A7F3D0', background: '#ECFDF5', color: '#065F46', fontSize: '13px' }}>{message}</div>}
+
+      {/* Step-Up OTP Challenge Modal */}
+      {stepUpTxId && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 1000
+        }}>
+          <div style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: 'var(--radius-md)',
+            padding: '28px',
+            width: '100%',
+            maxWidth: '420px',
+            boxShadow: 'var(--shadow-lg)'
+          }}>
+            <h3 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '8px' }}>
+              Security Challenge: Multi-Factor OTP
+            </h3>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px', lineHeight: 1.4 }}>
+              The FraudGuard AI Risk Policy identified elevated friction for transaction <strong>{stepUpTxId}</strong>. A one-time verification code has been dispatched to your registered email address.
+            </p>
+
+            {otpError && (
+              <div style={{ padding: '10px', backgroundColor: '#FEF2F2', color: '#B91C1C', borderRadius: 'var(--radius-sm)', fontSize: '13px', marginBottom: '14px' }}>
+                {otpError}
+              </div>
+            )}
+
+            <form onSubmit={handleVerifyStepUp}>
+              <div style={{ marginBottom: '18px' }}>
+                <label style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                  6-DIGIT VERIFICATION CODE
+                </label>
+                <input
+                  type="text"
+                  maxLength={6}
+                  placeholder="e.g. 123456"
+                  value={stepUpOtp}
+                  onChange={(e) => setStepUpOtp(e.target.value.replace(/\D/g, ''))}
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    fontSize: '18px',
+                    letterSpacing: '4px',
+                    textAlign: 'center',
+                    fontWeight: 700,
+                    borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--border-color)',
+                    boxSizing: 'border-box'
+                  }}
+                  required
+                />
+              </div>
+
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  onClick={() => { setStepUpTxId(null); setStepUpOtp(''); }}
+                  style={{
+                    padding: '10px 16px',
+                    backgroundColor: 'transparent',
+                    border: '1px solid var(--border-color)',
+                    borderRadius: 'var(--radius-sm)',
+                    color: 'var(--text-secondary)',
+                    fontWeight: 600,
+                    fontSize: '13px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={verifyingOtp || stepUpOtp.length !== 6}
+                  style={{
+                    padding: '10px 20px',
+                    backgroundColor: 'var(--primary)',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    borderRadius: 'var(--radius-sm)',
+                    fontWeight: 700,
+                    fontSize: '13px',
+                    cursor: verifyingOtp ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  {verifyingOtp ? 'Verifying...' : 'Confirm & Transfer'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
         <section style={{ background: '#fff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '24px' }}>
@@ -215,17 +348,43 @@ export const CustomerTransfers: React.FC = () => {
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
             <thead><tr style={{ background: 'var(--bg-card-subtle)', color: 'var(--text-muted)' }}>
-              <th style={{ textAlign: 'left', padding: '12px 16px' }}>Recipient / sender</th><th style={{ textAlign: 'left', padding: '12px 16px' }}>Amount</th><th style={{ textAlign: 'left', padding: '12px 16px' }}>Decision</th><th style={{ textAlign: 'left', padding: '12px 16px' }}>Status</th><th style={{ textAlign: 'left', padding: '12px 16px' }}>Date</th><th style={{ textAlign: 'left', padding: '12px 16px' }}>Transaction ID</th>
+              <th style={{ textAlign: 'left', padding: '12px 16px' }}>Recipient / sender</th>
+              <th style={{ textAlign: 'left', padding: '12px 16px' }}>Amount</th>
+              <th style={{ textAlign: 'left', padding: '12px 16px' }}>Fraud Risk</th>
+              <th style={{ textAlign: 'left', padding: '12px 16px' }}>Decision</th>
+              <th style={{ textAlign: 'left', padding: '12px 16px' }}>Status</th>
+              <th style={{ textAlign: 'left', padding: '12px 16px' }}>Analysis / Reason</th>
+              <th style={{ textAlign: 'left', padding: '12px 16px' }}>Date</th>
             </tr></thead>
             <tbody>
               {filteredTransactions.map((item) => (
                 <tr key={item.id} style={{ borderTop: '1px solid var(--border-color)' }}>
                   <td style={{ padding: '12px 16px' }}>{item.recipient_name || item.sender_name || item.recipient_id}</td>
                   <td style={{ padding: '12px 16px', fontWeight: 700 }}>${item.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-                  <td style={{ padding: '12px 16px', fontFamily: 'monospace' }}>{item.decision || 'N/A'}</td>
+                  <td style={{ padding: '12px 16px', fontFamily: 'monospace', fontWeight: 600, color: (item.fraud_probability ?? 0) > 0.04 ? '#B45309' : '#047857' }}>
+                    {item.fraud_probability != null ? `${(item.fraud_probability * 100).toFixed(2)}%` : 'N/A'}
+                  </td>
+                  <td style={{ padding: '12px 16px', fontFamily: 'monospace' }}>
+                    <span style={{
+                      padding: '3px 8px',
+                      borderRadius: '4px',
+                      fontSize: '11px',
+                      fontWeight: 700,
+                      backgroundColor: item.decision === 'APPROVE' ? '#ECFDF5' : item.decision === 'REVIEW' ? '#FEF3C7' : '#FEF2F2',
+                      color: item.decision === 'APPROVE' ? '#065F46' : item.decision === 'REVIEW' ? '#92400E' : '#B91C1C'
+                    }}>
+                      {item.decision || 'N/A'}
+                    </span>
+                  </td>
                   <td style={{ padding: '12px 16px' }}><span style={{ ...statusStyle(item.status), borderRadius: '12px', padding: '4px 8px', fontSize: '11px', fontWeight: 700 }}>{item.status.replaceAll('_', ' ')}</span></td>
+                  <td style={{ padding: '12px 16px', maxWidth: '240px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                    {item.risk_reasons && item.risk_reasons.length > 0 ? (
+                      <div>{item.risk_reasons[0]}</div>
+                    ) : (
+                      <span style={{ color: 'var(--text-muted)' }}>Normal baseline pattern</span>
+                    )}
+                  </td>
                   <td style={{ padding: '12px 16px', color: 'var(--text-muted)' }}>{new Date(item.created_at).toLocaleString()}</td>
-                  <td style={{ padding: '12px 16px', fontFamily: 'monospace', fontSize: '11px' }}>{item.id}</td>
                 </tr>
               ))}
               {!filteredTransactions.length && <tr><td colSpan={6} style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>{loading ? 'Loading transactions...' : 'No persisted transactions found.'}</td></tr>}
