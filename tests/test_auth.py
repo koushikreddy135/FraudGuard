@@ -449,3 +449,29 @@ def test_google_oauth_state_is_scoped_per_attempt(client):
     location = first_callback.headers["location"]
     assert "oauth_error" in location
     assert "Invalid or expired OAuth state" not in location
+
+
+def test_google_oauth_redirect_uri_matches_request_origin(client):
+    response = client.get(
+        "/api/auth/oauth/google/url",
+        headers={"Host": "localhost:8000"},
+    )
+    assert response.status_code == 200
+    oauth_url = response.json()["url"]
+    assert oauth_url is not None
+    query = urllib.parse.parse_qs(
+        urllib.parse.urlparse(oauth_url).query
+    )
+    assert query["redirect_uri"] == ["http://localhost:8000/api/auth/oauth/google/callback"]
+
+    loopback_response = client.get(
+        "/api/auth/oauth/google/url",
+        headers={"Host": "127.0.0.1:8000"},
+    )
+    loopback_url = loopback_response.json()["url"]
+    loopback_query = urllib.parse.parse_qs(
+        urllib.parse.urlparse(loopback_url).query
+    )
+    assert loopback_query["redirect_uri"] == [
+        "http://127.0.0.1:8000/api/auth/oauth/google/callback"
+    ]

@@ -391,7 +391,7 @@ async def logout(response: Response):
 # ───────────────────────────────────────────────
 
 @router.get("/oauth/google/url")
-async def get_google_oauth_url(response: Response):
+async def get_google_oauth_url(request: Request, response: Response):
     """
     Returns the Google OAuth 2.0 authorization URL and sets a secure CSRF state cookie.
     """
@@ -403,6 +403,15 @@ async def get_google_oauth_url(response: Response):
         }
     
     state = uuid.uuid4().hex
+    configured_redirect_uri = settings.GOOGLE_REDIRECT_URI
+    redirect_uri = configured_redirect_uri
+    if settings.ENVIRONMENT == "development":
+        forwarded_proto = request.headers.get("x-forwarded-proto")
+        forwarded_host = request.headers.get("x-forwarded-host")
+        scheme = forwarded_proto or request.url.scheme
+        host = forwarded_host or request.headers.get("host") or request.url.netloc
+        if host:
+            redirect_uri = f"{scheme}://{host}/api/auth/oauth/google/callback"
     cookie_options = dict(
         value=state,
         httponly=True,
@@ -417,15 +426,33 @@ async def get_google_oauth_url(response: Response):
         key=f"oauth_state_{state}",
         **cookie_options,
     )
+    response.set_cookie(
+        key=f"oauth_redirect_uri_{state}",
+        value=redirect_uri,
+        httponly=True,
+        secure=(settings.ENVIRONMENT != "development"),
+        samesite="lax",
+        path="/",
+        max_age=1800,
+    )
     # Retain the legacy key during a rolling deployment for in-flight logins.
     response.set_cookie(
         key="oauth_state",
         **cookie_options,
     )
+    response.set_cookie(
+        key="oauth_redirect_uri",
+        value=redirect_uri,
+        httponly=True,
+        secure=(settings.ENVIRONMENT != "development"),
+        samesite="lax",
+        path="/",
+        max_age=1800,
+    )
 
     params = {
         "client_id": settings.GOOGLE_CLIENT_ID,
-        "redirect_uri": settings.GOOGLE_REDIRECT_URI,
+        "redirect_uri": redirect_uri,
         "response_type": "code",
         "scope": "openid email profile",
         "access_type": "offline",
@@ -459,6 +486,11 @@ async def google_oauth_callback(
     cookie_state = exact_cookie_state or (
         legacy_cookie_state if state and state == legacy_cookie_state else None
     )
+    redirect_uri = (
+        request.cookies.get(f"oauth_redirect_uri_{state}")
+        if state
+        else None
+    ) or request.cookies.get("oauth_redirect_uri") or settings.GOOGLE_REDIRECT_URI
     cookie_options = dict(
         path="/",
         httponly=True,
@@ -467,7 +499,9 @@ async def google_oauth_callback(
     )
     if state:
         response.delete_cookie(key=f"oauth_state_{state}", **cookie_options)
+        response.delete_cookie(key=f"oauth_redirect_uri_{state}", **cookie_options)
     response.delete_cookie(key="oauth_state", **cookie_options)
+    response.delete_cookie(key="oauth_redirect_uri", **cookie_options)
 
     if not state or not cookie_state or state != cookie_state:
         err_msg = urllib.parse.quote("Invalid or expired OAuth state parameter (CSRF protection). Please try again.")
@@ -491,7 +525,7 @@ async def google_oauth_callback(
                     "client_secret": settings.GOOGLE_CLIENT_SECRET,
                     "code": code,
                     "grant_type": "authorization_code",
-                    "redirect_uri": settings.GOOGLE_REDIRECT_URI
+                    "redirect_uri": redirect_uri
                 }
             )
             if token_resp.status_code != 200:
