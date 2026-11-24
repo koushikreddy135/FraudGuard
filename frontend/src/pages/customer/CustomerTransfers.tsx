@@ -32,6 +32,11 @@ interface Transaction {
   created_at: string;
 }
 
+const formatFraudProbability = (probability: number) => {
+  const percent = probability * 100;
+  return `${percent > 0 && percent < 0.01 ? percent.toPrecision(2) : percent.toFixed(2)}%`;
+};
+
 export const CustomerTransfers: React.FC = () => {
   const [account, setAccount] = useState<Account | null>(null);
   const [recipients, setRecipients] = useState<Recipient[]>([]);
@@ -362,7 +367,7 @@ export const CustomerTransfers: React.FC = () => {
                   <td style={{ padding: '12px 16px' }}>{item.recipient_name || item.sender_name || item.recipient_id}</td>
                   <td style={{ padding: '12px 16px', fontWeight: 700 }}>${item.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                   <td style={{ padding: '12px 16px', fontFamily: 'monospace', fontWeight: 600, color: (item.fraud_probability ?? 0) > 0.04 ? '#B45309' : '#047857' }}>
-                    {item.fraud_probability != null ? `${(item.fraud_probability * 100).toFixed(2)}%` : 'N/A'}
+                    {item.fraud_probability != null ? formatFraudProbability(item.fraud_probability) : 'N/A'}
                   </td>
                   <td style={{ padding: '12px 16px', fontFamily: 'monospace' }}>
                     <span style={{
@@ -381,7 +386,7 @@ export const CustomerTransfers: React.FC = () => {
                     {item.risk_reasons && item.risk_reasons.length > 0 ? (
                       <div>{item.risk_reasons[0]}</div>
                     ) : (
-                      <span style={{ color: 'var(--text-muted)' }}>Normal baseline pattern</span>
+                      <span style={{ color: 'var(--text-muted)' }}>No elevated-risk reason returned by the scoring service.</span>
                     )}
                   </td>
                   <td style={{ padding: '12px 16px', color: 'var(--text-muted)' }}>{new Date(item.created_at).toLocaleString()}</td>

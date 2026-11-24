@@ -20,9 +20,12 @@ interface AdminDashboardData {
     review_count?: number;
     stepup_count?: number;
     declined_count?: number;
+    pending_review_count?: number;
+    scored_transaction_count?: number;
     avg_fraud_prob?: number;
     avg_latency_ms?: number;
     ml_engine_status: string;
+    model_status: { available: boolean; model_version: string | null; feature_count: number; error: string | null };
     auth_guard: string;
   };
   recent_audit_logs: Array<{
@@ -44,6 +47,7 @@ interface TransactionFeed {
   status: string;
   timestamp: string;
   risk_reasons?: string[];
+  review_reason?: string | null;
 }
 
 interface UserItem {
@@ -59,6 +63,7 @@ interface UserItem {
 
 interface ModelOpsData {
   live_version: string;
+  model_status: { available: boolean; model_version: string | null; feature_count: number; error: string | null };
   metrics: {
     trees?: number;
     pos_weight?: number;
@@ -82,6 +87,11 @@ interface ModelOpsData {
     reason: string;
   }>;
 }
+
+const formatFraudProbability = (probability: number) => {
+  const percent = probability * 100;
+  return `${percent > 0 && percent < 0.01 ? percent.toPrecision(2) : percent.toFixed(2)}%`;
+};
 
 export const AdminDashboard: React.FC = () => {
   const { user } = useAuth();
@@ -115,12 +125,14 @@ export const AdminDashboard: React.FC = () => {
   }, []);
 
   const handleReviewAction = async (transactionId: string, action: 'APPROVE' | 'REJECT') => {
+    const notes = window.prompt(`Reason for ${action === 'APPROVE' ? 'approval' : 'decline'}:`);
+    if (!notes?.trim()) return;
     setProcessingId(transactionId);
     setReviewMessage(null);
     try {
       const res = await apiRequest<{ success: boolean; message: string }>('/api/admin/transactions/review', {
         method: 'POST',
-        body: JSON.stringify({ transaction_id: transactionId, action }),
+        body: JSON.stringify({ transaction_id: transactionId, action, notes: notes.trim() }),
       });
       setReviewMessage(res.message);
       loadData();
@@ -241,20 +253,20 @@ export const AdminDashboard: React.FC = () => {
             <span style={{ fontSize: '12px', color: '#10B981', fontWeight: 700 }}>${(data?.system_metrics.total_volume ?? 0).toLocaleString()}</span>
           </div>
           <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--text-primary)' }}>
-            {data?.system_metrics.total_transactions ?? transactions.length} txns
+            {data ? data.system_metrics.total_transactions ?? transactions.length : '—'} txns
           </div>
         </div>
 
         <div style={{ backgroundColor: 'var(--bg-card)', borderRadius: 'var(--radius-sm)', padding: '20px', border: '1px solid var(--border-color)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Reviews & Step-ups</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Pending analyst reviews</span>
             <AlertTriangle size={16} color="#F59E0B" />
           </div>
           <div style={{ fontSize: '24px', fontWeight: 800, color: '#F59E0B' }}>
-            {(data?.system_metrics.review_count ?? 0) + (data?.system_metrics.stepup_count ?? 0)}
+            {data?.system_metrics.pending_review_count ?? '—'}
           </div>
           <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-            Flagged for inspection
+            Awaiting an analyst decision
           </div>
         </div>
 
@@ -264,7 +276,7 @@ export const AdminDashboard: React.FC = () => {
             <Cpu size={16} color="var(--primary)" />
           </div>
           <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--primary)' }}>
-            {data?.system_metrics.avg_latency_ms ?? 3.4} ms
+            {data?.system_metrics.avg_latency_ms ?? '—'} ms
           </div>
           <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
             Real-time inference speed
@@ -277,7 +289,7 @@ export const AdminDashboard: React.FC = () => {
             <CheckCircle2 size={16} color="#10B981" />
           </div>
           <div style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
-            {modelOps?.live_version || 'v20261124'}
+            {data?.system_metrics.model_status.model_version || 'Unavailable'}
           </div>
           <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '4px' }}>
             Active LightGBM tree booster
@@ -349,7 +361,8 @@ export const AdminDashboard: React.FC = () => {
               <div>
                 <h2 style={{ fontSize: '17px', fontWeight: 800, margin: 0 }}>LightGBM Production Governance</h2>
                 <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                  Model Version: <strong>{modelOps?.live_version}</strong> &bull; Calibration: Isotonic Regression &bull; SRS Gate: &le; 5pp Decile Gap
+                  Model {modelOps?.model_status.available ? 'available' : 'unavailable'}: <strong>{modelOps?.model_status.model_version || 'No loaded model'}</strong> &bull; Features: {modelOps?.model_status.feature_count ?? 0}
+                  {!modelOps?.model_status.available && modelOps?.model_status.error ? ` • ${modelOps.model_status.error}` : ''}
                 </p>
               </div>
               <button
@@ -370,25 +383,25 @@ export const AdminDashboard: React.FC = () => {
               <div style={{ padding: '14px', backgroundColor: 'var(--bg-card-subtle)', borderRadius: 'var(--radius-sm)' }}>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Precision-Recall AUC</div>
                 <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
-                  {modelOps?.metrics.pr_auc ? modelOps.metrics.pr_auc.toFixed(4) : '0.8924'}
+                  {modelOps?.metrics.pr_auc?.toFixed(4) ?? '—'}
                 </div>
               </div>
               <div style={{ padding: '14px', backgroundColor: 'var(--bg-card-subtle)', borderRadius: 'var(--radius-sm)' }}>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Recall @ 1% FPR</div>
                 <div style={{ fontSize: '20px', fontWeight: 800, color: '#10B981', marginTop: '4px' }}>
-                  {modelOps?.metrics.recall_at_1pct_fpr ? `${(modelOps.metrics.recall_at_1pct_fpr * 100).toFixed(1)}%` : '84.2%'}
+                  {modelOps?.metrics.recall_at_1pct_fpr != null ? `${(modelOps.metrics.recall_at_1pct_fpr * 100).toFixed(1)}%` : '—'}
                 </div>
               </div>
               <div style={{ padding: '14px', backgroundColor: 'var(--bg-card-subtle)', borderRadius: 'var(--radius-sm)' }}>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Worst Decile Gap</div>
                 <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
-                  {modelOps?.metrics.worst_decile_gap_pp ? `${modelOps.metrics.worst_decile_gap_pp.toFixed(2)} pp` : '1.82 pp'}
+                  {modelOps?.metrics.worst_decile_gap_pp != null ? `${modelOps.metrics.worst_decile_gap_pp.toFixed(2)} pp` : '—'}
                 </div>
               </div>
               <div style={{ padding: '14px', backgroundColor: 'var(--bg-card-subtle)', borderRadius: 'var(--radius-sm)' }}>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Brier Score Loss</div>
                 <div style={{ fontSize: '20px', fontWeight: 800, color: 'var(--text-primary)', marginTop: '4px' }}>
-                  {modelOps?.metrics.brier ? modelOps.metrics.brier.toFixed(6) : '0.000321'}
+                  {modelOps?.metrics.brier?.toFixed(6) ?? '—'}
                 </div>
               </div>
             </div>
@@ -549,9 +562,9 @@ export const AdminDashboard: React.FC = () => {
             </thead>
             <tbody>
               {transactions
-                .filter((tx) => activeTab === 'overview' || (tx.status === 'PENDING_REVIEW' || tx.status === 'REQUIRES_VERIFICATION' || tx.decision === 'REVIEW' || tx.decision === 'DECLINE'))
+                .filter((tx) => activeTab === 'overview' || tx.status === 'PENDING_REVIEW')
                 .map((transaction) => {
-                const isUnderReview = transaction.status === 'PENDING_REVIEW' || transaction.status === 'REQUIRES_VERIFICATION';
+                const isUnderReview = transaction.status === 'PENDING_REVIEW';
                 return (
                   <tr key={transaction.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
                     <td style={{ padding: '12px 20px', color: 'var(--primary)', fontFamily: 'monospace', fontSize: '12px' }}>{transaction.id}</td>
@@ -564,7 +577,7 @@ export const AdminDashboard: React.FC = () => {
                     <td style={{ padding: '12px 20px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span style={{ fontWeight: 700, color: (transaction.fraud_probability ?? 0) > 0.04 ? '#F59E0B' : '#10B981' }}>
-                          {transaction.fraud_probability == null ? 'Unavailable' : `${(transaction.fraud_probability * 100).toFixed(2)}%`}
+                          {transaction.fraud_probability == null ? 'Unavailable' : formatFraudProbability(transaction.fraud_probability)}
                         </span>
                       </div>
                     </td>
@@ -591,7 +604,7 @@ export const AdminDashboard: React.FC = () => {
                           ))}
                         </div>
                       ) : (
-                        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Standard processing profile</span>
+                        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No elevated-risk reason returned by the scoring service.</span>
                       )}
                     </td>
                     <td style={{ padding: '12px 20px', color: 'var(--text-secondary)' }}>

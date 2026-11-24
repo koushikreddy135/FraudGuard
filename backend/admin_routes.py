@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 import uuid
 from datetime import datetime, timezone
 
@@ -8,18 +8,42 @@ from backend.database import get_db
 
 router = APIRouter(prefix="/api/admin", tags=["Admin Portal"])
 
+def _model_status() -> dict:
+    # serve owns model lifecycle; read its state so admin views never infer
+    # health from artifact files that may not have loaded successfully.
+    try:
+        from serve import STATE
+        return {
+            "available": bool(STATE.get("ready")),
+            "model_version": STATE.get("version"),
+            "feature_count": len(STATE.get("names", [])),
+            "error": STATE.get("error"),
+        }
+    except Exception as exc:
+        return {"available": False, "model_version": None, "feature_count": 0,
+                "error": f"{type(exc).__name__}: {exc}"}
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 class ReviewActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     transaction_id: str
     action: str  # 'APPROVE' or 'REJECT'
-    notes: str = ""
+    notes: str = Field(..., min_length=3, max_length=500)
+
+    @field_validator("notes")
+    @classmethod
+    def notes_required(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 3:
+            raise ValueError("A review reason of at least 3 characters is required.")
+        return value
 
 @router.post("/transactions/review")
 async def review_transaction(req: ReviewActionRequest, user: dict = Depends(require_role(["ADMIN"]))):
     """
-    Allows Admin to manually approve or reject a transaction under REVIEW or PENDING_REVIEW.
+    Allows an admin to approve or reject a transaction awaiting analyst review.
     If approved, executes atomic debit/credit fund transfer.
     """
     action = req.action.upper()
@@ -34,7 +58,7 @@ async def review_transaction(req: ReviewActionRequest, user: dict = Depends(requ
         if not tx:
             raise HTTPException(status_code=404, detail="Transaction not found.")
 
-        if tx["status"] not in ("PENDING_REVIEW", "REQUIRES_VERIFICATION"):
+        if tx["status"] != "PENDING_REVIEW":
             raise HTTPException(status_code=400, detail=f"Cannot review transaction with status {tx['status']}.")
 
         amount_cents = tx["amount_cents"]
@@ -81,16 +105,17 @@ async def review_transaction(req: ReviewActionRequest, user: dict = Depends(requ
                 UPDATE transactions SET
                     status = 'COMPLETED',
                     decision = 'MANUALLY_APPROVED',
+                reviewed_by = ?, reviewed_at = ?, review_reason = ?,
                     sender_balance_after_cents = ?,
                     recipient_balance_after_cents = ?,
                     updated_at = ?
                 WHERE id = ?
-            """, (sender_after, recipient_after, now, tx["id"]))
+            """, (user["id"], now, req.notes, sender_after, recipient_after, now, tx["id"]))
 
             cursor.execute("""
                 INSERT INTO audit_logs (id, user_id, action, details, created_at)
                 VALUES (?, ?, 'ADMIN_OVERRIDE_APPROVE', ?, ?)
-            """, (f"aud_{uuid.uuid4().hex}", user["id"], f"Admin approved {tx['id']} for ${amount_cents/100:.2f}. Notes: {req.notes}", now))
+            """, (f"aud_{uuid.uuid4().hex}", user["id"], f"Admin approved {tx['id']} for ${amount_cents/100:.2f}. Reason: {req.notes}", now))
 
             return {"success": True, "status": "COMPLETED", "message": "Transaction manually approved and settled."}
 
@@ -99,14 +124,15 @@ async def review_transaction(req: ReviewActionRequest, user: dict = Depends(requ
                 UPDATE transactions SET
                     status = 'DECLINED',
                     decision = 'MANUALLY_DECLINED',
+                    reviewed_by = ?, reviewed_at = ?, review_reason = ?,
                     updated_at = ?
                 WHERE id = ?
-            """, (now, tx["id"]))
+            """, (user["id"], now, req.notes, now, tx["id"]))
 
             cursor.execute("""
                 INSERT INTO audit_logs (id, user_id, action, details, created_at)
                 VALUES (?, ?, 'ADMIN_OVERRIDE_REJECT', ?, ?)
-            """, (f"aud_{uuid.uuid4().hex}", user["id"], f"Admin rejected {tx['id']} for ${amount_cents/100:.2f}. Notes: {req.notes}", now))
+            """, (f"aud_{uuid.uuid4().hex}", user["id"], f"Admin rejected {tx['id']} for ${amount_cents/100:.2f}. Reason: {req.notes}", now))
 
             return {"success": True, "status": "DECLINED", "message": "Transaction manually declined by admin."}
 
@@ -146,6 +172,9 @@ async def get_all_transactions(user: dict = Depends(require_role(["ADMIN"]))):
             "status": row["status"],
             "model_version": row["model_version"],
             "risk_reasons": json.loads(row["risk_reasons"]) if row["risk_reasons"] else [],
+            "reviewed_by": row["reviewed_by"],
+            "reviewed_at": row["reviewed_at"],
+            "review_reason": row["review_reason"],
             "timestamp": row["created_at"],
         })
     return {"transactions": transactions}
@@ -174,10 +203,14 @@ async def get_admin_dashboard(user: dict = Depends(require_role(["ADMIN"]))):
                 SUM(CASE WHEN decision = 'STEP_UP' OR decision = 'VERIFIED_STEP_UP' THEN 1 ELSE 0 END) as stepup_count,
                 SUM(CASE WHEN decision = 'DECLINE' THEN 1 ELSE 0 END) as declined_count,
                 AVG(fraud_probability) as avg_fraud_prob,
-                AVG(scoring_latency_ms) as avg_latency
+                AVG(scoring_latency_ms) as avg_latency,
+                SUM(CASE WHEN status = 'PENDING_REVIEW' THEN 1 ELSE 0 END) as pending_review_count
             FROM transactions
         """)
         stats = cursor.fetchone()
+        scored_transaction_count = cursor.execute(
+            "SELECT COUNT(*) FROM transactions WHERE fraud_probability IS NOT NULL"
+        ).fetchone()[0]
 
         cursor.execute("""
             SELECT id, action, details, created_at, user_id
@@ -203,9 +236,12 @@ async def get_admin_dashboard(user: dict = Depends(require_role(["ADMIN"]))):
             "review_count": stats["review_count"] or 0,
             "stepup_count": stats["stepup_count"] or 0,
             "declined_count": stats["declined_count"] or 0,
+            "pending_review_count": stats["pending_review_count"] or 0,
+            "scored_transaction_count": scored_transaction_count,
             "avg_fraud_prob": round(float(stats["avg_fraud_prob"] or 0) * 100, 2),
             "avg_latency_ms": round(float(stats["avg_latency"] or 0), 2),
-            "ml_engine_status": "Operational (LightGBM 22-Feature Engine)",
+            "ml_engine_status": "Operational (LightGBM)" if _model_status()["available"] else "Unavailable",
+            "model_status": _model_status(),
             "auth_guard": "Enforced"
         },
         "recent_audit_logs": recent_logs
@@ -278,7 +314,8 @@ async def get_model_ops(admin: dict = Depends(require_role(["ADMIN"]))):
     model_dir = Path("artifacts")
     registry_dir = Path("sim_registry")
 
-    version = (model_dir / "VERSION").read_text().strip() if (model_dir / "VERSION").exists() else "unknown"
+    runtime = _model_status()
+    version = runtime["model_version"] or "unavailable"
     metrics = {}
     if (model_dir / "metrics.json").exists():
         metrics = json.loads((model_dir / "metrics.json").read_text())
@@ -294,6 +331,7 @@ async def get_model_ops(admin: dict = Depends(require_role(["ADMIN"]))):
 
     return {
         "live_version": version,
+        "model_status": runtime,
         "metrics": metrics,
         "history": history[-10:],
     }
@@ -315,12 +353,27 @@ async def rollback_model(admin: dict = Depends(require_role(["ADMIN"]))):
         if proc.returncode != 0:
             raise HTTPException(status_code=400, detail=f"Rollback failed: {proc.stderr or proc.stdout}")
 
+        # Artifact replacement does not update the already loaded booster.
+        # Reload it in this process and report failure if it cannot score.
+        from serve import load
+        load()
+        runtime = _model_status()
+        if not runtime["available"]:
+            raise HTTPException(status_code=503, detail={
+                "error": "model_reload_failed",
+                "message": "Rollback artifacts were selected, but the model did not load successfully.",
+                "model_status": runtime,
+            })
+
         with get_db() as conn:
             conn.execute("""
                 INSERT INTO audit_logs (id, user_id, action, details, created_at)
                 VALUES (?, ?, 'MODEL_ROLLBACK', ?, ?)
             """, (f"aud_{uuid.uuid4().hex}", admin["id"], "Admin executed model version rollback", now))
 
-        return {"success": True, "message": "Model rolled back successfully. Server reload active.", "output": proc.stdout}
+        return {"success": True, "message": f"Model {runtime['model_version']} loaded after rollback.",
+                "model_status": runtime, "output": proc.stdout}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

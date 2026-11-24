@@ -339,6 +339,7 @@ async def create_transfer(req: TransferRequest, user: dict = Depends(require_rol
         transaction_id, raw_probability, calibrated_probability, decision,
         model_version, service_latency, round_trip_ms,
     )
+    stepup_notification = None
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("BEGIN IMMEDIATE")
@@ -435,21 +436,45 @@ async def create_transfer(req: TransferRequest, user: dict = Depends(require_rol
             current_time,
         ))
 
-        # If decision is STEP_UP, generate a verification OTP and send to the customer's email
+        # Persist the challenge in the same transaction as the decision. Send
+        # email only after releasing SQLite's write lock.
         if decision == "STEP_UP":
             stepup_otp = generate_secure_otp()
             stepup_hash = hash_token(stepup_otp)
-            otp_expires = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+            otp_expires = (datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)).isoformat()
             cursor.execute("""
-                INSERT INTO password_reset_otps (id, user_id, otp_hash, expires_at, attempts_left, is_used, created_at)
-                VALUES (?, ?, ?, ?, 5, 0, ?)
-            """, (f"otp_{uuid.uuid4().hex}", user["id"], stepup_hash, otp_expires, current_time))
-            try:
-                send_otp_email(user["email"], stepup_otp)
-            except Exception as e:
-                logger.error("Failed to deliver step-up verification email: %s", e)
+                INSERT INTO password_reset_otps (id, user_id, otp_hash, expires_at, attempts_left, is_used, created_at, transaction_id)
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+            """, (f"otp_{uuid.uuid4().hex}", user["id"], stepup_hash, otp_expires,
+                  settings.MAX_OTP_ATTEMPTS, current_time, transaction_id))
+
+            stepup_notification = (user["email"], user["full_name"], stepup_otp)
 
         created = cursor.execute("SELECT * FROM transactions WHERE id = ?", (transaction_id,)).fetchone()
+
+    if stepup_notification:
+        try:
+            delivered = send_otp_email(*stepup_notification)
+        except Exception as e:
+            logger.error("Failed to deliver step-up verification email: %s", e)
+            delivered = False
+        if not delivered:
+            failure_time = _utc_now()
+            with get_db() as conn:
+                cursor = conn.cursor()
+                cursor.execute("BEGIN IMMEDIATE")
+                cursor.execute("UPDATE password_reset_otps SET is_used = 1 WHERE transaction_id = ?", (transaction_id,))
+                cursor.execute("""
+                    UPDATE transactions SET status = 'STEP_UP_DELIVERY_FAILED',
+                        risk_reasons = ?, updated_at = ? WHERE id = ? AND status = 'REQUIRES_VERIFICATION'
+                """, (json.dumps(["Verification email could not be delivered; no funds were moved"]),
+                      failure_time, transaction_id))
+                cursor.execute("""
+                    INSERT INTO audit_logs (id, user_id, action, details, created_at)
+                    VALUES (?, ?, 'STEP_UP_DELIVERY_FAILED', ?, ?)
+                """, (f"aud_{uuid.uuid4().hex}", user["id"],
+                      f"Verification email delivery failed for transfer {transaction_id}", failure_time))
+                created = cursor.execute("SELECT * FROM transactions WHERE id = ?", (transaction_id,)).fetchone()
 
     return _serialize_transaction(created)
 
@@ -565,6 +590,18 @@ async def get_customer_dashboard(user: dict = Depends(require_role(["CUSTOMER"])
             ORDER BY created_at DESC LIMIT 5
         """, (user["id"], user["id"]))
         recent = [dict(row) for row in cursor.fetchall()]
+        last_login = cursor.execute("""
+            SELECT created_at FROM audit_logs
+            WHERE user_id = ? AND action IN ('CUSTOMER_LOGIN', 'LOGIN_SUCCESS', 'GOOGLE_OAUTH_LOGIN')
+            ORDER BY created_at DESC LIMIT 1
+        """, (user["id"],)).fetchone()
+
+    try:
+        from serve import STATE
+        model_ready = bool(STATE.get("ready"))
+        model_version = STATE.get("version")
+    except Exception:
+        model_ready, model_version = False, None
 
     return {
         "status": "active",
@@ -572,9 +609,8 @@ async def get_customer_dashboard(user: dict = Depends(require_role(["CUSTOMER"])
             "id": user["id"],
             "email": user["email"],
             "full_name": user["full_name"],
-            "account_tier": "Premier Secure",
-            "security_status": "Shield Active - Protected by FraudGuard AI",
-            "last_login": "Just now",
+            "security_status": "Fraud scoring available" if model_ready else "Fraud scoring unavailable",
+            "last_login": last_login["created_at"] if last_login else None,
             "account": {
                 "id": account["id"] if account else None,
                 "balance": (account["balance_cents"] / 100) if account else 0,
@@ -584,14 +620,7 @@ async def get_customer_dashboard(user: dict = Depends(require_role(["CUSTOMER"])
             }
         },
         "recent_activity": recent,
-        "notifications": [
-            {
-                "id": "notif_1",
-                "title": "Real-time AI Shield Active",
-                "message": "Your account is actively protected against unauthorized outbound transfers and takeover attempts.",
-                "type": "info"
-            }
-        ]
+        "model_status": {"available": model_ready, "model_version": model_version},
     }
 
 
@@ -615,12 +644,12 @@ async def verify_stepup_transfer(req: StepUpVerifyRequest, user: dict = Depends(
         if tx["status"] != "REQUIRES_VERIFICATION":
             raise HTTPException(status_code=400, detail=f"Transaction is in status {tx['status']}, not awaiting verification.")
 
-        # Check latest active OTP for user
+        # A challenge can authorize only the transaction it was issued for.
         otp_row = cursor.execute("""
             SELECT * FROM password_reset_otps
-            WHERE user_id = ? AND is_used = 0 AND expires_at > ?
+            WHERE user_id = ? AND transaction_id = ? AND is_used = 0 AND expires_at > ?
             ORDER BY created_at DESC LIMIT 1
-        """, (user["id"], now)).fetchone()
+        """, (user["id"], tx["id"], now)).fetchone()
 
         if not otp_row:
             raise HTTPException(status_code=400, detail="No active verification code found. Please initiate a new transfer.")
@@ -632,6 +661,9 @@ async def verify_stepup_transfer(req: StepUpVerifyRequest, user: dict = Depends(
             cursor.execute("""
                 UPDATE password_reset_otps SET attempts_left = attempts_left - 1 WHERE id = ?
             """, (otp_row["id"],))
+            # The request context rolls back on HTTPException. Commit the
+            # security counter first so invalid attempts are actually limited.
+            conn.commit()
             raise HTTPException(status_code=400, detail=f"Invalid OTP code. {otp_row['attempts_left'] - 1} attempts remaining.")
 
         # Mark OTP used
