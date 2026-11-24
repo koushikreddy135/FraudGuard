@@ -37,15 +37,15 @@ pipeline {
 
         stage('Checkout Code') {
             steps {
-                checkout([
-                    $class: 'GitSCM',
-                    branches: scm.branches,
-                    userRemoteConfigs: scm.userRemoteConfigs,
-                    extensions: [[$class: 'CloneOption', shallow: true, depth: 1, noTags: true, timeout: 30]]
-                ])
                 script {
-                    // SCM checkout exports GIT_COMMIT; avoid depending on interactive Git PATH.
-                    def sha = env.GIT_COMMIT.take(7)
+                    def checkoutInfo = checkout([
+                        $class: 'GitSCM',
+                        branches: scm.branches,
+                        userRemoteConfigs: scm.userRemoteConfigs,
+                        extensions: [[$class: 'CloneOption', shallow: true, depth: 1, noTags: true, timeout: 30]]
+                    ])
+                    // Use the checkout result instead of depending on the service PATH for Git.
+                    def sha = checkoutInfo.GIT_COMMIT.take(7)
                     env.IMAGE_TAG = "${env.BUILD_NUMBER}-${sha}"
                     echo "Building ${env.BACKEND_IMAGE}:${env.IMAGE_TAG} and ${env.FRONTEND_IMAGE}:${env.IMAGE_TAG}"
                 }
