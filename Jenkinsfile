@@ -52,18 +52,45 @@ pipeline {
             }
         }
 
+        stage('Prepare Docker CLI') {
+            steps {
+                script {
+                    // Give Docker CLI a job-local config so the LocalSystem service can
+                    // discover Docker Desktop's bundled CLI plugins without user-profile config.
+                    env.DOCKER_CONFIG = "${env.WORKSPACE}\\.docker"
+                }
+                powershell '''
+                    $dockerExe = (Get-Command docker.exe -ErrorAction Stop).Source
+                    $resourcesDir = Split-Path (Split-Path $dockerExe -Parent) -Parent
+                    $pluginDir = Join-Path $resourcesDir 'cli-plugins'
+                    if (-not (Test-Path (Join-Path $pluginDir 'docker-buildx.exe'))) {
+                        throw "Docker Buildx plugin not found in $pluginDir"
+                    }
+                    New-Item -ItemType Directory -Path $env:DOCKER_CONFIG -Force | Out-Null
+                    @{ cliPluginsExtraDirs = @($pluginDir) } |
+                        ConvertTo-Json | Set-Content -LiteralPath (Join-Path $env:DOCKER_CONFIG 'config.json') -Encoding ASCII
+                    docker buildx version
+                    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                    docker compose version
+                    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                '''
+            }
+        }
+
         stage('Unit Tests') {
             steps {
                 echo 'Running backend unit tests with pytest in the Docker test image.'
                 bat '''
                     if not exist test-results mkdir test-results
                     docker build --target test -t fraudguard-test:%BUILD_NUMBER% .
+                    if errorlevel 1 exit /b 1
                     docker run --rm --mount "type=bind,source=%WORKSPACE%/test-results,target=/reports" fraudguard-test:%BUILD_NUMBER% python -m pytest tests -q --junitxml=/reports/pytest-results.xml
+                    if errorlevel 1 exit /b 1
                 '''
             }
             post {
                 always {
-                    junit 'test-results/pytest-results.xml'
+                    junit testResults: 'test-results/pytest-results.xml', allowEmptyResults: true
                 }
             }
         }
@@ -80,7 +107,9 @@ pipeline {
                 withCredentials([string(credentialsId: env.SECRET_CRED, variable: 'SECRET_KEY')]) {
                     bat '''
                         docker compose down --remove-orphans
+                        if errorlevel 1 exit /b 1
                         docker compose up -d --no-build
+                        if errorlevel 1 exit /b 1
                     '''
                 }
             }
