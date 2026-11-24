@@ -36,7 +36,9 @@ class MockAsyncClient:
         if self.response_mode == "invalid":
             return MockResponse("APPROVE", json["transaction_id"], invalid=True)
         amount = json["features"]["amount"]
-        decision = "APPROVE" if amount < 100 else "DECLINE"
+        decision = self.response_mode.upper() if self.response_mode in ("step_up", "review") else (
+            "APPROVE" if amount < 100 else "DECLINE"
+        )
         return MockResponse(decision, json["transaction_id"])
 
 
@@ -397,3 +399,127 @@ def test_transfer_rejects_frontend_scores_and_fractional_cents(app_client):
     }, headers=auth(token_a))
     assert extra_score.status_code == 422
     assert fractional_cent.status_code == 422
+
+
+def test_step_up_otp_is_transaction_bound_limited_and_single_use(app_client, monkeypatch):
+    from backend import customer_routes
+
+    token_a = login(app_client, CUSTOMER_A)
+    token_b = login(app_client, CUSTOMER_B)
+    recipient = next(
+        item for item in app_client.get("/api/customer/recipients", headers=auth(token_a)).json()["recipients"]
+        if item["email"] == CUSTOMER_B
+    )
+    sent_codes = []
+    monkeypatch.setattr(customer_routes, "send_otp_email", lambda _email, _name, code: sent_codes.append(code) or True)
+    monkeypatch.setattr(MockAsyncClient, "response_mode", "step_up")
+    result = app_client.post("/api/customer/transfers", json={
+        "recipient": recipient["id"], "amount": 10,
+        "idempotency_key": f"step-up-{RUN_ID}",
+    }, headers=auth(token_a))
+    assert result.status_code == 200
+    tx_id = result.json()["id"]
+    assert result.json()["status"] == "REQUIRES_VERIFICATION"
+    assert len(sent_codes) == 1
+
+    invalid_code = ("0" if sent_codes[0][0] != "0" else "1") + sent_codes[0][1:]
+    invalid = app_client.post("/api/customer/transfers/verify-stepup", json={
+        "transaction_id": tx_id, "otp": invalid_code,
+    }, headers=auth(token_a))
+    assert invalid.status_code == 400
+    with get_db() as conn:
+        otp = conn.execute("SELECT attempts_left, transaction_id FROM password_reset_otps WHERE transaction_id = ?", (tx_id,)).fetchone()
+    assert otp["attempts_left"] == 4
+    assert otp["transaction_id"] == tx_id
+
+    verified = app_client.post("/api/customer/transfers/verify-stepup", json={
+        "transaction_id": tx_id, "otp": sent_codes[0],
+    }, headers=auth(token_a))
+    assert verified.status_code == 200
+    assert verified.json()["status"] == "COMPLETED"
+    replay = app_client.post("/api/customer/transfers/verify-stepup", json={
+        "transaction_id": tx_id, "otp": sent_codes[0],
+    }, headers=auth(token_a))
+    assert replay.status_code == 400
+    cross_customer = app_client.post("/api/customer/transfers/verify-stepup", json={
+        "transaction_id": tx_id, "otp": sent_codes[0],
+    }, headers=auth(token_b))
+    assert cross_customer.status_code == 404
+    monkeypatch.setattr(MockAsyncClient, "response_mode", "normal")
+
+
+def test_analyst_review_requires_reason_and_cannot_bypass_step_up(app_client, monkeypatch):
+    from backend import customer_routes
+
+    monkeypatch.setattr(MockAsyncClient, "response_mode", "step_up")
+    monkeypatch.setattr(customer_routes, "send_otp_email", lambda *_args: True)
+    token_a = login(app_client, CUSTOMER_A)
+    token_admin = login(app_client, ADMIN_EMAIL, "ADMIN")
+    recipient = next(
+        item for item in app_client.get("/api/customer/recipients", headers=auth(token_a)).json()["recipients"]
+        if item["email"] == CUSTOMER_B
+    )
+    response = app_client.post("/api/customer/transfers", json={
+        "recipient": recipient["id"], "amount": 10,
+        "idempotency_key": f"review-{RUN_ID}",
+    }, headers=auth(token_a))
+    assert response.status_code == 200
+    tx_id = response.json()["id"]
+    assert response.json()["status"] == "REQUIRES_VERIFICATION"
+    # STEP_UP is never eligible for analyst settlement; it must pass its OTP.
+    bypass = app_client.post("/api/admin/transactions/review", json={
+        "transaction_id": tx_id, "action": "APPROVE", "notes": "Should not bypass challenge",
+    }, headers=auth(token_admin))
+    assert bypass.status_code == 400
+
+    monkeypatch.setattr(MockAsyncClient, "response_mode", "review")
+    review = app_client.post("/api/customer/transfers", json={
+        "recipient": recipient["id"], "amount": 12,
+        "idempotency_key": f"review-action-{RUN_ID}",
+    }, headers=auth(token_a))
+    assert review.status_code == 200
+    assert review.json()["status"] == "PENDING_REVIEW"
+    review_id = review.json()["id"]
+    no_reason = app_client.post("/api/admin/transactions/review", json={
+        "transaction_id": review_id, "action": "APPROVE", "notes": " "
+    }, headers=auth(token_admin))
+    assert no_reason.status_code == 422
+    approved = app_client.post("/api/admin/transactions/review", json={
+        "transaction_id": review_id, "action": "APPROVE", "notes": "Verified customer request"
+    }, headers=auth(token_admin))
+    assert approved.status_code == 200
+    with get_db() as conn:
+        audited = conn.execute(
+            "SELECT status, reviewed_by, reviewed_at, review_reason FROM transactions WHERE id = ?",
+            (review_id,),
+        ).fetchone()
+    assert audited["status"] == "COMPLETED"
+    assert audited["reviewed_by"] is not None
+    assert audited["reviewed_at"] is not None
+    assert audited["review_reason"] == "Verified customer request"
+    monkeypatch.setattr(MockAsyncClient, "response_mode", "normal")
+
+
+def test_failed_step_up_email_cannot_settle_transfer(app_client, monkeypatch):
+    from backend import customer_routes
+
+    token_a = login(app_client, CUSTOMER_A)
+    recipient = next(
+        item for item in app_client.get("/api/customer/recipients", headers=auth(token_a)).json()["recipients"]
+        if item["email"] == CUSTOMER_B
+    )
+    monkeypatch.setattr(MockAsyncClient, "response_mode", "step_up")
+    monkeypatch.setattr(customer_routes, "send_otp_email", lambda *_args: False)
+    before = app_client.get("/api/customer/account", headers=auth(token_a)).json()["balance_cents"]
+    response = app_client.post("/api/customer/transfers", json={
+        "recipient": recipient["id"], "amount": 10,
+        "idempotency_key": f"step-up-email-fail-{RUN_ID}",
+    }, headers=auth(token_a))
+    assert response.status_code == 200
+    assert response.json()["status"] == "STEP_UP_DELIVERY_FAILED"
+    assert app_client.get("/api/customer/account", headers=auth(token_a)).json()["balance_cents"] == before
+    verify = app_client.post("/api/customer/transfers/verify-stepup", json={
+        "transaction_id": response.json()["id"], "otp": "123456",
+    }, headers=auth(token_a))
+    assert verify.status_code == 400
+    monkeypatch.setattr(MockAsyncClient, "response_mode", "normal")

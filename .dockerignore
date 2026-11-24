@@ -1,0 +1,39 @@
+# Keep the build context small (datasets are ~150 MB) and keep secrets out of images.
+.git
+.gitignore
+
+# Datasets and output that the running app does not need
+**/*.csv
+**/*.xlsx
+results
+sim_artifacts
+demo_results.json
+
+# One-off scripts (NOT train.py / retrain.py / demo_rows.json: those are copied into the image)
+make_demo_rows.py
+make_fake_paysim.py
+replay_generator.py
+mock_ingest_api.py
+try_demo_rows.py
+
+# Secrets and local state
+.env
+.env.*
+!.env.example
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+
+# Build output / caches
+**/__pycache__
+**/.pytest_cache
+**/node_modules
+frontend/dist
+venv
+.venv
+
+# Not needed inside the image
+k8s
+Jenkinsfile
+docker-compose.yml
+*.md

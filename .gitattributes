@@ -1,0 +1,12 @@
+# Force LF on every OS. Git for Windows (autocrlf=true) would otherwise check these out as CRLF,
+# which breaks the LightGBM model on Linux/Docker ("Model format error, expect a tree here").
+artifacts/model.txt text eol=lf
+sim_artifacts/model.txt text eol=lf
+sim_registry/**/model.txt text eol=lf
+
+Dockerfile text eol=lf
+Jenkinsfile text eol=lf
+docker-compose.yml text eol=lf
+.dockerignore text eol=lf
+
+*.joblib binary

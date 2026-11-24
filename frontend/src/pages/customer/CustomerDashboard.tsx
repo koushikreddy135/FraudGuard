@@ -9,9 +9,8 @@ interface CustomerDashboardData {
     id: string;
     email: string;
     full_name: string;
-    account_tier: string;
     security_status: string;
-    last_login: string;
+    last_login: string | null;
     account: {
       id: string;
       balance: number;
@@ -20,12 +19,8 @@ interface CustomerDashboardData {
       simulated: boolean;
     };
   };
-  notifications: Array<{
-    id: string;
-    title: string;
-    message: string;
-    type: string;
-  }>;
+  model_status: { available: boolean; model_version: string | null };
+  recent_activity: Array<{ id: string; decision: string | null; status: string }>;
 }
 
 export const CustomerDashboard: React.FC = () => {
@@ -126,10 +121,10 @@ export const CustomerDashboard: React.FC = () => {
           </div>
           <div>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
-              Risk Level: Low
+              Fraud scoring: {_data?.model_status.available ? 'Available' : 'Unavailable'}
             </div>
             <div style={{ fontSize: '11px', color: '#047857', fontWeight: 600 }}>
-              Zero suspicious flags
+              {_data?.recent_activity.length ?? 0} recent transactions
             </div>
           </div>
         </div>
@@ -278,11 +273,11 @@ export const CustomerDashboard: React.FC = () => {
                   Session Authenticated Successfully
                 </div>
                 <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                  Authenticated with JWT standard bearer token &bull; Session IP verified
+                  Last successful login: {_data?.user.last_login ? new Date(_data.user.last_login).toLocaleString() : 'No login record'}
                 </div>
               </div>
             </div>
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Just now</span>
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Account security</span>
           </div>
 
           <div style={{
@@ -298,14 +293,14 @@ export const CustomerDashboard: React.FC = () => {
               <Lock size={20} color="#164E63" />
               <div>
                 <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
-                  Outbound Transfer Guard Engaged
+                  Outbound Transfer Scoring
                 </div>
                 <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                  Model Version v20261120-100346 monitoring accounts
+                  {_data?.model_status.available ? `Model ${_data.model_status.model_version} is ready` : 'Model unavailable; transfers cannot be scored'}
                 </div>
               </div>
             </div>
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Today</span>
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{_data?.model_status.available ? 'Ready' : 'Unavailable'}</span>
           </div>
         </div>
       </div>

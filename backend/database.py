@@ -3,8 +3,7 @@ import os
 from contextlib import contextmanager
 from datetime import datetime
 
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "fraudguard.db"))
-
+DB_PATH = os.path.abspath(os.environ.get("DB_PATH") or os.path.join(os.path.dirname(__file__), "..", "fraudguard.db"))
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
@@ -138,6 +137,20 @@ def init_db():
         ):
             if column not in transaction_columns:
                 cursor.execute(f"ALTER TABLE transactions ADD COLUMN {column} {definition}")
+        for column, definition in (
+            ("reviewed_by", "TEXT"),
+            ("reviewed_at", "TEXT"),
+            ("review_reason", "TEXT"),
+        ):
+            if column not in transaction_columns:
+                cursor.execute(f"ALTER TABLE transactions ADD COLUMN {column} {definition}")
+
+        # STEP_UP challenges share the existing OTP store, but must be bound to
+        # one transaction so another pending challenge cannot authorize it.
+        otp_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(password_reset_otps)").fetchall()}
+        if "transaction_id" not in otp_columns:
+            cursor.execute("ALTER TABLE password_reset_otps ADD COLUMN transaction_id TEXT")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_otp_transaction ON password_reset_otps(transaction_id, is_used, expires_at)")
 
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS ledger_entries (

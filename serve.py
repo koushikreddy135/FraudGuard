@@ -44,7 +44,7 @@ from backend.admin_routes import router as admin_router
 
 warnings.filterwarnings("ignore", category=UserWarning)
 MODEL_DIR = Path(os.environ.get("MODEL_DIR", "artifacts"))
-STATE = {"ready": False}
+STATE = {"ready": False, "error": None}
 
 
 @asynccontextmanager
@@ -213,8 +213,10 @@ def load():
         STATE["cost"] = cost
         _predict({})                          # prove the model can score before taking traffic
         STATE["ready"] = True
+        STATE["error"] = None
     except Exception as e:                    # no usable model -> stay not ready (readiness probe fails)
         STATE["ready"] = False
+        STATE["error"] = f"{type(e).__name__}: {e}"
         print("model load failed:", e)
 
 

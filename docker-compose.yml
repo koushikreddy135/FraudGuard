@@ -1,18 +1,33 @@
+# Run locally (PowerShell):
+#   $env:SECRET_KEY = "<64 hex characters>"
+#   docker compose up --build -d
+#   Frontend: http://localhost:8000 | Backend API: http://localhost:8001
+# Jenkins deploy: BACKEND_IMAGE / FRONTEND_IMAGE / IMAGE_TAG / SECRET_KEY are provided by Jenkins.
+
 services:
-  fraudguard:
+  backend:
+    image: ${BACKEND_IMAGE:-fraudguard-backend}:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: fraudguard-app
+      target: backend-runtime
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
-      - ENVIRONMENT=production
-      - JWT_SECRET_KEY=production-secure-key-replace-with-env-secret-32-chars
-      - CORS_ORIGINS=["http://localhost:8000","http://127.0.0.1:8000"]
-      - MODEL_DIR=artifacts
-      - ML_SERVICE_URL=http://localhost:8000
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set (64 hex characters)}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      DB_PATH: /app/data/fraudguard.db
+      MODEL_DIR: artifacts
+      ML_SERVICE_URL: http://127.0.0.1:8000
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/auth/oauth/google/callback}
+      SMTP_ENABLED: ${SMTP_ENABLED:-False}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
     volumes:
       - fraudguard_data:/app/data
     healthcheck:
@@ -20,7 +35,25 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      start_period: 40s
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-fraudguard-frontend}:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend-runtime
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8000:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   fraudguard_data:
