@@ -76,15 +76,30 @@ pipeline {
             steps {
                 // Wait for the container HEALTHCHECK (/health = 200 once the model has loaded)
                 powershell '''
+                    $containerId = docker compose ps -q fraudguard
+
+                    if (-not $containerId) {
+                        Write-Host "FraudGuard container was not found."
+                        docker compose logs --tail 100 fraudguard
+                        exit 1
+                    }
+
                     for ($i = 0; $i -lt 30; $i++) {
-                        $s = docker inspect -f "{{.State.Health.Status}}" fraudguard-app 2>$null
-                        Write-Host "health: $s"
-                        if ($s -eq "healthy") { exit 0 }
+                        $health = docker inspect -f "{{.State.Health.Status}}" $containerId 2>$null
+
+                        Write-Host "Health status: $health"
+
+                        if ($health -eq "healthy") {
+                            Write-Host "FraudGuard is healthy!"
+                            exit 0
+                        }
+
                         Start-Sleep -Seconds 5
                     }
-                    docker logs --tail 100 fraudguard-app
+
+                    docker compose logs --tail 100 fraudguard
                     exit 1
-                '''
+                 '''
             }
         }
     }

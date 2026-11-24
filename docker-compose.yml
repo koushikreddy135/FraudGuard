@@ -9,22 +9,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: fraudguard-app
+    # No container_name: Docker Compose manages container names
     restart: unless-stopped
     ports:
       - "8000:8000"
     environment:
-      # The code reads SECRET_KEY (NOT JWT_SECRET_KEY). Required: without it the app silently falls
-      # back to a public default signing key, so compose refuses to start when it is missing.
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set (64 hex characters)}
-      # "production" turns on Secure cookies; browsers accept them on http://localhost.
-      # For a plain-HTTP demo on another address, run with ENVIRONMENT=development.
       ENVIRONMENT: ${ENVIRONMENT:-production}
-      # Database lives on the named volume below, so users survive redeploys
       DB_PATH: /app/data/fraudguard.db
       MODEL_DIR: artifacts
       ML_SERVICE_URL: http://127.0.0.1:8000
-      # Optional: Google sign-in and password-reset email
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/auth/oauth/google/callback}
