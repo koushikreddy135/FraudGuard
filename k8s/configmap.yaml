@@ -7,5 +7,6 @@ metadata:
 data:
   ENVIRONMENT: "production"
   MODEL_DIR: "artifacts"
-  ML_SERVICE_URL: "http://localhost:8000"
-  CORS_ORIGINS: '["http://localhost:8000","http://127.0.0.1:8000"]'
+  DB_PATH: "/app/data/fraudguard.db"
+  ML_SERVICE_URL: "http://backend:8000"
+  GOOGLE_REDIRECT_URI: "http://localhost:30080/api/auth/oauth/google/callback"

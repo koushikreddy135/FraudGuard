@@ -1,23 +1,25 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: fraudguard-deployment
+  name: fraudguard-backend
   labels:
-    app: fraudguard
+    app: fraudguard-backend
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
-      app: fraudguard
+      app: fraudguard-backend
   template:
     metadata:
       labels:
-        app: fraudguard
+        app: fraudguard-backend
     spec:
+      securityContext:
+        fsGroup: 10001
       containers:
-        - name: fraudguard-app
-          image: fraudguard-app:latest
-          imagePullPolicy: IfNotPresent
+        - name: backend
+          image: fraudguard-backend:7-fb9d957
+          imagePullPolicy: Never
           ports:
             - containerPort: 8000
           envFrom:
@@ -32,31 +34,56 @@ spec:
             limits:
               memory: "1Gi"
               cpu: "1000m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            runAsNonRoot: true
+            runAsUser: 10001
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            periodSeconds: 5
+            failureThreshold: 60
           livenessProbe:
             httpGet:
               path: /healthz
               port: 8000
-            initialDelaySeconds: 15
             periodSeconds: 20
           readinessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 10
             periodSeconds: 10
+            failureThreshold: 6
           volumeMounts:
-            - name: persistent-storage
+            - name: fraudguard-data
               mountPath: /app/data
       volumes:
-        - name: persistent-storage
-          emptyDir: {}
+        - name: fraudguard-data
+          persistentVolumeClaim:
+            claimName: fraudguard-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fraudguard-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 1Gi
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: fraudguard-service
+  name: backend
   labels:
-    app: fraudguard
+    app: fraudguard-backend
 spec:
   type: ClusterIP
   ports:
@@ -65,4 +92,62 @@ spec:
       protocol: TCP
       name: http
   selector:
-    app: fraudguard
+    app: fraudguard-backend
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraudguard-frontend
+  labels:
+    app: fraudguard-frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fraudguard-frontend
+  template:
+    metadata:
+      labels:
+        app: fraudguard-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: fraudguard-frontend:7-fb9d957
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 80
+              name: http
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "50m"
+            limits:
+              memory: "128Mi"
+              cpu: "250m"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  labels:
+    app: fraudguard-frontend
+spec:
+  type: NodePort
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30080
+      protocol: TCP
+      name: http
+  selector:
+    app: fraudguard-frontend
