@@ -451,7 +451,9 @@ def test_google_oauth_state_is_scoped_per_attempt(client):
     assert "Invalid or expired OAuth state" not in location
 
 
-def test_google_oauth_redirect_uri_matches_request_origin(client):
+def test_google_oauth_redirect_uri_uses_registered_value(client):
+    from backend.config import settings
+
     response = client.get(
         "/api/auth/oauth/google/url",
         headers={"Host": "localhost:8000"},
@@ -462,7 +464,13 @@ def test_google_oauth_redirect_uri_matches_request_origin(client):
     query = urllib.parse.parse_qs(
         urllib.parse.urlparse(oauth_url).query
     )
-    assert query["redirect_uri"] == ["http://localhost:8000/api/auth/oauth/google/callback"]
+    assert query["redirect_uri"] == [settings.GOOGLE_REDIRECT_URI]
+    with get_db() as conn:
+        state_row = conn.execute(
+            "SELECT redirect_uri FROM oauth_states WHERE state = ?",
+            (query["state"][0],),
+        ).fetchone()
+    assert state_row["redirect_uri"] == settings.GOOGLE_REDIRECT_URI
 
     loopback_response = client.get(
         "/api/auth/oauth/google/url",
@@ -472,9 +480,7 @@ def test_google_oauth_redirect_uri_matches_request_origin(client):
     loopback_query = urllib.parse.parse_qs(
         urllib.parse.urlparse(loopback_url).query
     )
-    assert loopback_query["redirect_uri"] == [
-        "http://127.0.0.1:8000/api/auth/oauth/google/callback"
-    ]
+    assert loopback_query["redirect_uri"] == [settings.GOOGLE_REDIRECT_URI]
 
 
 def test_google_oauth_accepts_one_time_server_state_without_cookie(client):
@@ -492,3 +498,60 @@ def test_google_oauth_accepts_one_time_server_state_without_cookie(client):
     )
     assert callback.status_code == 307
     assert "Invalid or expired OAuth state" not in callback.headers["location"]
+
+
+def test_google_oauth_exchange_always_uses_registered_redirect_uri(client, monkeypatch):
+    from backend.config import settings
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"access_token": "test-access-token"}
+
+    class FakeUserinfoResponse:
+        status_code = 401
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, data):
+            captured.update(data)
+            return FakeResponse()
+
+        async def get(self, url, headers):
+            return FakeUserinfoResponse()
+
+    monkeypatch.setattr("backend.auth_routes.httpx.AsyncClient", FakeAsyncClient)
+    response = client.get("/api/auth/oauth/google/url")
+    oauth_url = response.json()["url"]
+    state = urllib.parse.parse_qs(
+        urllib.parse.urlparse(oauth_url).query
+    )["state"][0]
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE oauth_states SET redirect_uri = ? WHERE state = ?",
+            ("http://127.0.0.1:8000/api/auth/oauth/google/callback", state),
+        )
+    client.cookies.clear()
+
+    callback = client.get(
+        "/api/auth/oauth/google/callback",
+        params={"code": "test-code", "state": state},
+        follow_redirects=False,
+    )
+    assert callback.status_code == 307
+    callback_error = urllib.parse.parse_qs(
+        urllib.parse.urlparse(callback.headers["location"]).query
+    )["oauth_error"][0]
+    assert "Failed to fetch verified user profile" in callback_error
+    assert captured["redirect_uri"] == settings.GOOGLE_REDIRECT_URI

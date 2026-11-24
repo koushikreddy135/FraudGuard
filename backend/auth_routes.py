@@ -391,7 +391,7 @@ async def logout(response: Response):
 # ───────────────────────────────────────────────
 
 @router.get("/oauth/google/url")
-async def get_google_oauth_url(request: Request, response: Response):
+async def get_google_oauth_url(response: Response):
     """
     Returns the Google OAuth 2.0 authorization URL and sets a secure CSRF state cookie.
     """
@@ -403,15 +403,7 @@ async def get_google_oauth_url(request: Request, response: Response):
         }
     
     state = uuid.uuid4().hex
-    configured_redirect_uri = settings.GOOGLE_REDIRECT_URI
-    redirect_uri = configured_redirect_uri
-    if settings.ENVIRONMENT == "development":
-        forwarded_proto = request.headers.get("x-forwarded-proto")
-        forwarded_host = request.headers.get("x-forwarded-host")
-        scheme = forwarded_proto or request.url.scheme
-        host = forwarded_host or request.headers.get("host") or request.url.netloc
-        if host:
-            redirect_uri = f"{scheme}://{host}/api/auth/oauth/google/callback"
+    redirect_uri = settings.GOOGLE_REDIRECT_URI
 
     expires_at = (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()
     with get_db() as conn:
@@ -437,28 +429,10 @@ async def get_google_oauth_url(request: Request, response: Response):
         key=f"oauth_state_{state}",
         **cookie_options,
     )
-    response.set_cookie(
-        key=f"oauth_redirect_uri_{state}",
-        value=redirect_uri,
-        httponly=True,
-        secure=(settings.ENVIRONMENT != "development"),
-        samesite="lax",
-        path="/",
-        max_age=1800,
-    )
     # Retain the legacy key during a rolling deployment for in-flight logins.
     response.set_cookie(
         key="oauth_state",
         **cookie_options,
-    )
-    response.set_cookie(
-        key="oauth_redirect_uri",
-        value=redirect_uri,
-        httponly=True,
-        secure=(settings.ENVIRONMENT != "development"),
-        samesite="lax",
-        path="/",
-        max_age=1800,
     )
 
     params = {
@@ -497,11 +471,7 @@ async def google_oauth_callback(
     cookie_state = exact_cookie_state or (
         legacy_cookie_state if state and state == legacy_cookie_state else None
     )
-    redirect_uri = (
-        request.cookies.get(f"oauth_redirect_uri_{state}")
-        if state
-        else None
-    ) or request.cookies.get("oauth_redirect_uri") or settings.GOOGLE_REDIRECT_URI
+    redirect_uri = settings.GOOGLE_REDIRECT_URI
     cookie_options = dict(
         path="/",
         httponly=True,
@@ -544,9 +514,6 @@ async def google_oauth_callback(
     ):
         err_msg = urllib.parse.quote("Invalid or expired OAuth state parameter (CSRF protection). Please try again.")
         return RedirectResponse(url=f"/login?oauth_error={err_msg}")
-
-    if server_state:
-        redirect_uri = server_state["redirect_uri"]
 
     if error or not code:
         err_msg = urllib.parse.quote(error or "Authorization code missing from Google")
