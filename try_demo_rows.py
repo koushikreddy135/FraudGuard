@@ -6,7 +6,7 @@ Saves every response to demo_results.json (use it for screenshots / the report).
 """
 import json, sys, urllib.request
 
-URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000/score"
+URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8001/score"
 rows = json.load(open("demo_rows.json"))
 
 

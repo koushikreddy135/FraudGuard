@@ -40,7 +40,10 @@ class Settings(BaseModel):
     GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
     GOOGLE_REDIRECT_URI: str = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/api/auth/oauth/google/callback")
 
-    ML_SERVICE_URL: str = os.getenv("ML_SERVICE_URL", "http://127.0.0.1:8000")
+    ML_SERVICE_URL: str = os.getenv(
+    "ML_SERVICE_URL",
+    "http://127.0.0.1:8001"
+)
     ML_SERVICE_TIMEOUT_SECONDS: float = float(os.getenv("ML_SERVICE_TIMEOUT_SECONDS", "5"))
 
     # Trusted CORS Frontend Origins
