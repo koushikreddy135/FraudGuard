@@ -2,3 +2,4 @@
 {"time": "2026-11-15 13:10:03", "event": "retrain", "version": "v20261115-131002-538", "promoted": true, "reason": "passed both gates", "candidate_cost": 2069745.4445000002, "live_version": "v20261115-130958-750-old", "live_cost": 6226512.776000004, "saving": 0.6675915526138801}
 {"time": "2026-11-15 13:12:18", "event": "retrain", "version": "v20261115-131217-546", "promoted": false, "reason": "not cheaper than the live model by enough", "candidate_cost": 2069745.4445000002, "live_version": "v20261115-131002-538", "live_cost": 2069745.4445000002, "saving": 0.0}
 {"time": "2026-11-15 13:12:37", "event": "rollback", "version": "v20261115-130958-750-old", "promoted": true, "rolled_back_from": "v20261115-131002-538"}
+{"time": "2026-11-25 00:09:06", "event": "rollback", "version": "v20261115-131002-538", "promoted": true, "rolled_back_from": "v20261124-004328"}

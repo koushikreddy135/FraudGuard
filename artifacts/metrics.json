@@ -1,43 +1,18 @@
 {
-  "modelVersion": "v20261124-004328",
-  "train_steps": [
-    1,
-    37
-  ],
-  "test_steps": [
-    38,
+  "modelVersion": "v20261115-131002-538",
+  "trained_rows": 344757,
+  "trained_frauds": 451,
+  "calibration_rows": 56089,
+  "calibration_frauds": 47,
+  "data_until_step": 42,
+  "parent": "v20261115-130958-750-old",
+  "holdout_steps": [
+    43,
     95
   ],
-  "logistic_regression": {
-    "pr_auc": 0.20485105519735028,
-    "recall_at_1pct_fpr": 0.7089337175792507
-  },
-  "lightgbm_raw": {
-    "pr_auc": 0.9812128376512074,
-    "recall_at_1pct_fpr": 0.9913544668587896
-  },
-  "lightgbm_calibrated": {
-    "pr_auc": 0.9700692218062523,
-    "brier": 0.0003850472037625861
-  },
-  "confusion_matrix": {
-    "at_1pct_fpr": {
-      "threshold": 0.32777,
-      "tn": 67994,
-      "fp": 32,
-      "fn": 5,
-      "tp": 342,
-      "precision": 0.9144,
-      "recall": 0.9856
-    },
-    "at_0.5": {
-      "threshold": 0.5,
-      "tn": 68005,
-      "fp": 21,
-      "fn": 9,
-      "tp": 338,
-      "precision": 0.9415,
-      "recall": 0.9741
-    }
-  }
+  "holdout_total_cost": 2069745.4445000002,
+  "holdout_pr_auc": 0.9871772988895681,
+  "holdout_brier": 0.0009512709540982669,
+  "holdout_max_decile_gap_pp": 1.375180666755925,
+  "promoted": true
 }

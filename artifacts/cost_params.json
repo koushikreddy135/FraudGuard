@@ -2,7 +2,7 @@
   "falseDeclineCost": 5000.0,
   "fraudLossProportion": 1.0,
   "reviewCost": 200.0,
-  "stepUpFrictionCost": 20.0,
+  "stepUpFrictionCost": 100.0,
   "stepUpPreventionProb": 0.7,
   "reviewAccuracy": 0.95,
   "reviewCapacityPerHour": 50
