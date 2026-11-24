@@ -1,6 +1,6 @@
 {
  "note": "Held-out PaySim test rows in the model's feature format. The model is trained on public data; the simulator replays held-out rows into the live pipeline.",
- "model_version": "v20261120-154831",
+ "model_version": "v20261124-004328",
  "how_to_use": "POST /score with {\"amount\": row.amount, \"features\": row.features}",
  "normal": [
   {
