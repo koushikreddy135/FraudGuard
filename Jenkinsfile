@@ -104,7 +104,11 @@ pipeline {
 
         stage('Deploy') {
             steps {
-                withCredentials([string(credentialsId: env.SECRET_CRED, variable: 'SECRET_KEY')]) {
+                withCredentials([
+                    string(credentialsId: env.SECRET_CRED, variable: 'SECRET_KEY'),
+                    string(credentialsId: 'fraudguard-google-client-id', variable: 'GOOGLE_CLIENT_ID'),
+                    string(credentialsId: 'fraudguard-google-client-secret', variable: 'GOOGLE_CLIENT_SECRET')
+                ]) {
                     bat '''
                         docker compose down --remove-orphans
                         if errorlevel 1 exit /b 1
