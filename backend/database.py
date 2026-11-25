@@ -195,3 +195,5 @@ def init_db():
             FROM users
             WHERE role = 'CUSTOMER'
         """, (datetime.now().isoformat(), datetime.now().isoformat()))
+
+
