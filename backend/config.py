@@ -45,6 +45,7 @@ class Settings(BaseModel):
     "http://127.0.0.1:8001"
 )
     ML_SERVICE_TIMEOUT_SECONDS: float = float(os.getenv("ML_SERVICE_TIMEOUT_SECONDS", "5"))
+    ML_API_KEY: str = os.getenv("ML_API_KEY", "")
 
     # Trusted CORS Frontend Origins
     CORS_ORIGINS: List[str] = [

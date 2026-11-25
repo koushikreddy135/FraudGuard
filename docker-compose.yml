@@ -20,6 +20,7 @@ services:
       DB_PATH: /app/data/fraudguard.db
       MODEL_DIR: artifacts
       ML_SERVICE_URL: http://127.0.0.1:8000
+      ML_API_KEY: ${ML_API_KEY:-fraudguard-ml-api-key-2026}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8000/api/auth/oauth/google/callback}

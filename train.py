@@ -20,7 +20,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import make_pipeline
 
 from features import build_features, FEATURE_COLUMNS, KEEP_TYPES
-from policy import (DEFAULT_COST_PARAMS, ACTIONS, expected_costs, decide_batch, realized_cost)
+from policy import (DEFAULT_COST_PARAMS, ACTIONS, SigmoidCalibrator, expected_costs, decide_batch, realized_cost)
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -44,6 +44,8 @@ def main():
     ap.add_argument("--out", default="artifacts")
     ap.add_argument("--trees", type=int, default=400)
     ap.add_argument("--pos_weight", type=float, default=10.0)
+    ap.add_argument("--calibration", choices=["sigmoid", "isotonic"], default="sigmoid",
+                    help="probability calibration method (sigmoid avoids hard 0/1 step collapses)")
     args = ap.parse_args()
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
@@ -104,9 +106,9 @@ def main():
     p_lr = lr.predict_proba(prep_lr(Xte))[:, 1]
 
     model = lgb.LGBMClassifier(
-        n_estimators=args.trees, learning_rate=0.05, num_leaves=31, min_child_samples=50,
-        reg_lambda=5.0, min_child_weight=1.0,      # stops huge leaf values / saturated scores
-        subsample=0.8, subsample_freq=1, colsample_bytree=0.8,
+        n_estimators=args.trees, learning_rate=0.05, max_depth=6, num_leaves=31,
+        min_child_samples=100, reg_alpha=1.0, reg_lambda=5.0, min_child_weight=1.0,
+        subsample=0.8, subsample_freq=1, colsample_bytree=0.6,
         scale_pos_weight=args.pos_weight, n_jobs=-1, random_state=7, verbose=-1)
     model.fit(Xtr, ytr)
     raw_te = model.predict_proba(Xte)[:, 1]
@@ -123,8 +125,9 @@ def main():
     print("\ntop features by gain:\n" + (imp / imp.sum()).head(10).round(3).to_string())
 
     # ------------------------------------------------------------------ 5. calibration + SHAP
-    hr("5. CALIBRATION (isotonic, fitted on the calibration slice)")
-    cal = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+    hr(f"5. CALIBRATION ({args.calibration}, fitted on the calibration slice)")
+    cal = (SigmoidCalibrator() if args.calibration == "sigmoid"
+           else IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0))
     cal.fit(raw_ca, yca)
     p_te = cal.predict(raw_te)
     print(f"Brier score  raw {brier_score_loss(yte, np.clip(raw_te,0,1)):.6f}  ->  calibrated {brier_score_loss(yte, p_te):.6f}")

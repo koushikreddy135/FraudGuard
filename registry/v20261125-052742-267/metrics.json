@@ -1,0 +1,18 @@
+{
+  "modelVersion": "v20261125-052742-267",
+  "trained_rows": 344762,
+  "trained_frauds": 453,
+  "calibration_rows": 56094,
+  "calibration_frauds": 47,
+  "data_until_step": 42,
+  "parent": "v20261115-131002-538",
+  "holdout_steps": [
+    43,
+    95
+  ],
+  "holdout_total_cost": 2252488.3265000004,
+  "holdout_pr_auc": 0.988124735636036,
+  "holdout_brier": 0.0010893823251116445,
+  "holdout_max_decile_gap_pp": 1.0158525963221545,
+  "promoted": false
+}

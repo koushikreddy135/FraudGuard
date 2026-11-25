@@ -16,6 +16,27 @@ The numbers below are PLACEHOLDERS (they are business estimates, not learned). P
 amounts are large, so the costs are scaled to match. Tune them and justify them in your demo.
 """
 import numpy as np
+from sklearn.linear_model import LogisticRegression
+
+
+class SigmoidCalibrator:
+    """Smooth Platt-scaling calibrator on logit(raw_prob) with a .predict() API matching IsotonicRegression."""
+
+    def __init__(self):
+        self._lr = LogisticRegression(C=1.0, solver="lbfgs", max_iter=500)
+
+    @staticmethod
+    def _to_logits(raw_scores):
+        clipped = np.clip(np.asarray(raw_scores, dtype=np.float64), 1e-6, 1.0 - 1e-6)
+        return np.log(clipped / (1.0 - clipped)).reshape(-1, 1)
+
+    def fit(self, raw_scores, y):
+        self._lr.fit(self._to_logits(raw_scores), np.asarray(y, dtype=int))
+        return self
+
+    def predict(self, raw_scores):
+        probs = self._lr.predict_proba(self._to_logits(raw_scores))[:, 1]
+        return np.clip(probs, 0.0, 1.0)
 
 ACTIONS = ["APPROVE", "STEP_UP", "REVIEW", "DECLINE"]   # order = tie-break order
 A_, S_, R_, D_ = 0, 1, 2, 3

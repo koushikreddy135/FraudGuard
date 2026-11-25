@@ -24,7 +24,7 @@ Usage
 
 After a promotion, restart serve.py so it loads the new model.
 """
-import argparse, json, shutil, time, warnings
+import argparse, json, shutil, sqlite3, time, warnings
 from pathlib import Path
 
 import joblib
@@ -35,7 +35,7 @@ from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import average_precision_score, brier_score_loss
 
 from features import build_features, FEATURE_COLUMNS, KEEP_TYPES
-from policy import DEFAULT_COST_PARAMS, ACTIONS, decide_batch, realized_cost
+from policy import DEFAULT_COST_PARAMS, ACTIONS, SigmoidCalibrator, decide_batch, realized_cost
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -96,21 +96,48 @@ def read_history(registry):
     return [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
 
 
+def load_db_feedback(db_path, step_value):
+    """Load admin-reviewed transactions from SQLite as labelled feedback rows."""
+    p = Path(db_path)
+    if not p.exists():
+        return pd.DataFrame()
+    conn = sqlite3.connect(str(p))
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT amount_cents, decision, ml_features
+        FROM transactions
+        WHERE decision IN ('MANUALLY_APPROVED', 'MANUALLY_DECLINED')
+          AND ml_features IS NOT NULL
+    """).fetchall()
+    conn.close()
+    records = []
+    for row in rows:
+        feats = json.loads(row["ml_features"])
+        rec = {col: feats.get(col) for col in FEATURE_COLUMNS}
+        rec["amount"] = row["amount_cents"] / 100.0
+        rec["isFraud"] = 1 if row["decision"] == "MANUALLY_DECLINED" else 0
+        rec["step"] = int(step_value)
+        records.append(rec)
+    return pd.DataFrame(records) if records else pd.DataFrame()
+
+
 # ----------------------------------------------------------------------------- training
-def fit_model(train, calib, trees, pos_weight):
+def fit_model(train, calib, trees, pos_weight, calibration="sigmoid"):
     m = lgb.LGBMClassifier(
-        n_estimators=trees, learning_rate=0.05, num_leaves=31, min_child_samples=50,
-        reg_lambda=5.0, min_child_weight=1.0,
-        subsample=0.8, subsample_freq=1, colsample_bytree=0.8,
+        n_estimators=trees, learning_rate=0.05, max_depth=6, num_leaves=31,
+        min_child_samples=100, reg_alpha=1.0, reg_lambda=5.0, min_child_weight=1.0,
+        subsample=0.8, subsample_freq=1, colsample_bytree=0.6,
         scale_pos_weight=pos_weight, n_jobs=-1, random_state=7, verbose=-1)
     m.fit(train[FEATURE_COLUMNS], train.isFraud.values)
     booster = m.booster_
     raw = booster.predict(calib[FEATURE_COLUMNS].to_numpy(np.float64))
-    cal = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0).fit(raw, calib.isFraud.values)
+    cal = (SigmoidCalibrator() if calibration == "sigmoid"
+           else IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0))
+    cal.fit(raw, calib.isFraud.values)
     return booster, cal
 
 
-def train_on_pool(pool, trees, pos_weight):
+def train_on_pool(pool, trees, pos_weight, calibration="sigmoid"):
     """Older 70% of the pool trains; the recent 30% is split randomly into more training data and a
     calibration half, so the calibrator sees the same regime as the data closest to the future."""
     q = int(pool.step.quantile(0.70))
@@ -121,7 +148,7 @@ def train_on_pool(pool, trees, pos_weight):
     calib = recent.iloc[half:]
     if len(calib) == 0 or calib.isFraud.sum() < 20:
         print(f"WARNING: calibration slice has only {int(calib.isFraud.sum())} frauds; calibration will be noisy.")
-    booster, cal = fit_model(train, calib, trees, pos_weight)
+    booster, cal = fit_model(train, calib, trees, pos_weight, calibration=calibration)
     info = {"trained_rows": int(len(train)), "trained_frauds": int(train.isFraud.sum()),
             "calibration_rows": int(len(calib)), "calibration_frauds": int(calib.isFraud.sum()),
             "data_until_step": int(pool.step.max())}
@@ -158,7 +185,8 @@ def save_model(folder, booster, cal, version, cost_params, meta):
 
 def load_live(model_dir):
     d = Path(model_dir)
-    return lgb.Booster(model_file=str(d / "model.txt")), joblib.load(d / "calibrator.joblib")
+    model_text = (d / "model.txt").read_text(encoding="utf-8")
+    return lgb.Booster(model_str=model_text), joblib.load(d / "calibrator.joblib")
 
 
 # ----------------------------------------------------------------------------- rollback
@@ -195,6 +223,10 @@ def main():
                     help="candidate must cut total cost by at least this fraction (0.01 = 1%%)")
     ap.add_argument("--trees", type=int, default=400)
     ap.add_argument("--pos-weight", type=float, default=10.0)
+    ap.add_argument("--calibration", choices=["sigmoid", "isotonic"], default="sigmoid",
+                    help="probability calibration method (sigmoid avoids hard 0/1 step collapses)")
+    ap.add_argument("--db", default=None,
+                    help="optional SQLite DB path to include admin-reviewed transactions in training")
     ap.add_argument("--simulate", action="store_true",
                     help="demo: build an OLD live model from older data, then retrain; uses sim_* folders")
     ap.add_argument("--sim-old-frac", type=float, default=0.5)
@@ -220,6 +252,11 @@ def main():
 
     cut = int(df.step.quantile(1 - args.holdout_frac))
     pool, hold = df[df.step <= cut], df[df.step > cut]
+    if args.db:
+        fb = load_db_feedback(args.db, pool.step.max())
+        if len(fb):
+            pool = pd.concat([pool, fb], ignore_index=True)
+            print(f"appended {len(fb):,} admin-reviewed feedback rows from {args.db}")
     if len(hold) == 0 or hold.isFraud.sum() < 10:
         raise SystemExit("Hold-out has too few frauds to compare models. Use more rows or a larger --holdout-frac.")
     print(f"training pool: steps {pool.step.min()}-{pool.step.max()} ({len(pool):,} rows, {int(pool.isFraud.sum()):,} frauds)")
@@ -230,7 +267,7 @@ def main():
     if args.simulate:
         hr("SIMULATION: deploying an older model trained on early data only")
         old_pool = pool[pool.step <= int(pool.step.quantile(args.sim_old_frac))]
-        b, c_, info = train_on_pool(old_pool, args.trees, args.pos_weight)
+        b, c_, info = train_on_pool(old_pool, args.trees, args.pos_weight, calibration=args.calibration)
         v_old = new_version("-old")
         tmp = registry / v_old
         save_model(tmp, b, c_, v_old, dict(DEFAULT_COST_PARAMS), {**info, "note": "simulated older model"})
@@ -247,7 +284,7 @@ def main():
 
     # ---- candidate
     hr("2. TRAIN CANDIDATE on all data before the hold-out")
-    booster, cal, info = train_on_pool(pool, args.trees, args.pos_weight)
+    booster, cal, info = train_on_pool(pool, args.trees, args.pos_weight, calibration=args.calibration)
     cand_version = new_version()
     p_cand = predict(booster, cal, hold)
     r_cand = evaluate(p_cand, hold, cost_params)

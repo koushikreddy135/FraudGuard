@@ -251,13 +251,18 @@ async def create_transfer(req: TransferRequest, user: dict = Depends(require_rol
     started_at = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=settings.ML_SERVICE_TIMEOUT_SECONDS) as client:
-            response = await client.post(
-                f"{settings.ML_SERVICE_URL.rstrip('/')}/score",
-                json={
+            post_kwargs = {
+                "json": {
                     "transaction_id": transaction_id,
                     "amount": amount_cents / 100,
                     "features": features,
-                },
+                }
+            }
+            if settings.ML_API_KEY:
+                post_kwargs["headers"] = {"X-API-Key": settings.ML_API_KEY}
+            response = await client.post(
+                f"{settings.ML_SERVICE_URL.rstrip('/')}/score",
+                **post_kwargs,
             )
             response.raise_for_status()
             score = response.json()

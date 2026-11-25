@@ -179,3 +179,13 @@ def test_production_model_scores_held_out_labeled_rows():
             assert 0 <= result["raw_fraud_probability"] <= 1
             assert result["calibrated_fraud_probability"] == result["fraud_probability"]
             assert result["scoring_latency_ms"] >= 0
+
+
+def test_api_key_protects_score_and_schema_when_configured(client, monkeypatch):
+    monkeypatch.setenv("ML_API_KEY", "test-secret-api-key")
+    assert client.get("/health").status_code == 200
+    assert client.get("/schema").status_code == 401
+    assert client.post("/score", json=NORMAL).status_code == 401
+    assert client.post("/score", json=NORMAL, headers={"X-API-Key": "wrong-key"}).status_code == 401
+    assert client.get("/schema", headers={"X-API-Key": "test-secret-api-key"}).status_code == 200
+    assert client.post("/score", json=NORMAL, headers={"X-API-Key": "test-secret-api-key"}).status_code == 200

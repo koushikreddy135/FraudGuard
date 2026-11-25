@@ -26,14 +26,20 @@ interface Transaction {
   amount: number;
   description?: string;
   fraud_probability?: number;
+  raw_fraud_probability?: number;
   decision?: string;
   status: string;
   risk_reasons: string[];
   created_at: string;
 }
 
-const formatFraudProbability = (probability: number) => {
+const formatFraudProbability = (probability: number, rawProbability?: number | null) => {
   const percent = probability * 100;
+  if (percent === 0 && rawProbability != null && rawProbability > 0) {
+    const rawPercent = rawProbability * 100;
+    const rawText = rawPercent < 0.01 ? rawPercent.toPrecision(2) : rawPercent.toFixed(2);
+    return `0.00% (raw ${rawText}%)`;
+  }
   return `${percent > 0 && percent < 0.01 ? percent.toPrecision(2) : percent.toFixed(2)}%`;
 };
 
@@ -367,7 +373,7 @@ export const CustomerTransfers: React.FC = () => {
                   <td style={{ padding: '12px 16px' }}>{item.recipient_name || item.sender_name || item.recipient_id}</td>
                   <td style={{ padding: '12px 16px', fontWeight: 700 }}>${item.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
                   <td style={{ padding: '12px 16px', fontFamily: 'monospace', fontWeight: 600, color: (item.fraud_probability ?? 0) > 0.04 ? '#B45309' : '#047857' }}>
-                    {item.fraud_probability != null ? formatFraudProbability(item.fraud_probability) : 'N/A'}
+                    {item.fraud_probability != null ? formatFraudProbability(item.fraud_probability, item.raw_fraud_probability) : 'N/A'}
                   </td>
                   <td style={{ padding: '12px 16px', fontFamily: 'monospace' }}>
                     <span style={{
@@ -386,7 +392,11 @@ export const CustomerTransfers: React.FC = () => {
                     {item.risk_reasons && item.risk_reasons.length > 0 ? (
                       <div>{item.risk_reasons[0]}</div>
                     ) : (
-                      <span style={{ color: 'var(--text-muted)' }}>No elevated-risk reason returned by the scoring service.</span>
+                      <span style={{ color: 'var(--text-muted)' }}>
+                        {item.decision === 'APPROVE' || item.decision === 'MANUALLY_APPROVED' || item.decision === 'VERIFIED_STEP_UP'
+                          ? 'Normal transaction profile — low fraud risk (approved).'
+                          : 'No elevated-risk reason returned by the scoring service.'}
+                      </span>
                     )}
                   </td>
                   <td style={{ padding: '12px 16px', color: 'var(--text-muted)' }}>{new Date(item.created_at).toLocaleString()}</td>

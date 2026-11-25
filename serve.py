@@ -18,7 +18,7 @@ GET  /health  ready only once the model is loaded (Kubernetes readiness probe) -
 GET  /schema  feature names + default policy
 (POST /decide is kept as an alias of /score.)
 """
-import json, os, warnings
+import hmac, json, os, warnings
 from contextlib import asynccontextmanager
 from pathlib import Path
 import time
@@ -27,7 +27,8 @@ from typing import Dict, List, Optional
 import joblib
 import lightgbm as lgb
 import numpy as np
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.security import APIKeyHeader
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -62,7 +63,7 @@ app.add_middleware(
     allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-Requested-With"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-API-Key"],
 )
 
 # Register Authentication & Portal Routers
@@ -225,6 +226,16 @@ def _require_ready():
         raise _error(503, "model_not_ready", "the model is not loaded yet")
 
 
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def _require_api_key(api_key: Optional[str] = Depends(api_key_header)):
+    """Enforce X-API-Key header on internal ML endpoints when ML_API_KEY is configured."""
+    expected_key = os.environ.get("ML_API_KEY", "") or settings.ML_API_KEY
+    if expected_key and (not api_key or not hmac.compare_digest(api_key, expected_key)):
+        raise _error(401, "invalid_api_key", "Missing or invalid X-API-Key header")
+
+
 # ----------------------------------------------------------------------------- endpoints
 @app.get("/health")
 @app.get("/readyz", include_in_schema=False)
@@ -240,7 +251,7 @@ def healthz():
     return {"status": "alive"}
 
 
-@app.get("/schema")
+@app.get("/schema", dependencies=[Depends(_require_api_key)])
 def schema():
     _require_ready()
     default = {api: STATE["cost"][internal] for api, internal in POLICY_KEYS.items()}
@@ -248,8 +259,8 @@ def schema():
             "decisions": list(DECISION_KEYS), "model_version": STATE["version"]}
 
 
-@app.post("/score", response_model=ScoreResponse)
-@app.post("/decide", response_model=ScoreResponse, include_in_schema=False)
+@app.post("/score", response_model=ScoreResponse, dependencies=[Depends(_require_api_key)])
+@app.post("/decide", response_model=ScoreResponse, include_in_schema=False, dependencies=[Depends(_require_api_key)])
 def score(req: ScoreRequest):
     _require_ready()
     unknown = sorted(set(req.features) - set(STATE["names"]))

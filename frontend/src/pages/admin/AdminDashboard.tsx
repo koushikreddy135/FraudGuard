@@ -43,6 +43,7 @@ interface TransactionFeed {
   recipient_name: string;
   amount: number;
   fraud_probability: number | null;
+  raw_fraud_probability?: number | null;
   decision: string | null;
   status: string;
   timestamp: string;
@@ -88,8 +89,13 @@ interface ModelOpsData {
   }>;
 }
 
-const formatFraudProbability = (probability: number) => {
+const formatFraudProbability = (probability: number, rawProbability?: number | null) => {
   const percent = probability * 100;
+  if (percent === 0 && rawProbability != null && rawProbability > 0) {
+    const rawPercent = rawProbability * 100;
+    const rawText = rawPercent < 0.01 ? rawPercent.toPrecision(2) : rawPercent.toFixed(2);
+    return `0.00% (raw ${rawText}%)`;
+  }
   return `${percent > 0 && percent < 0.01 ? percent.toPrecision(2) : percent.toFixed(2)}%`;
 };
 
@@ -577,7 +583,7 @@ export const AdminDashboard: React.FC = () => {
                     <td style={{ padding: '12px 20px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                         <span style={{ fontWeight: 700, color: (transaction.fraud_probability ?? 0) > 0.04 ? '#F59E0B' : '#10B981' }}>
-                          {transaction.fraud_probability == null ? 'Unavailable' : formatFraudProbability(transaction.fraud_probability)}
+                          {transaction.fraud_probability == null ? 'Unavailable' : formatFraudProbability(transaction.fraud_probability, transaction.raw_fraud_probability)}
                         </span>
                       </div>
                     </td>
@@ -604,7 +610,11 @@ export const AdminDashboard: React.FC = () => {
                           ))}
                         </div>
                       ) : (
-                        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No elevated-risk reason returned by the scoring service.</span>
+                        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                          {transaction.decision === 'APPROVE' || transaction.decision === 'MANUALLY_APPROVED' || transaction.decision === 'VERIFIED_STEP_UP'
+                            ? 'Normal transaction profile — low fraud risk (approved).'
+                            : 'No elevated-risk reason returned by the scoring service.'}
+                        </span>
                       )}
                     </td>
                     <td style={{ padding: '12px 20px', color: 'var(--text-secondary)' }}>
