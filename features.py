@@ -30,6 +30,7 @@ FEATURE_COLUMNS = [
 ]
 
 
+
 def _history_features(df: pd.DataFrame, key: str, prefix: str) -> pd.DataFrame:
     """Window counts/sums over strictly earlier steps for each row, per account `key`."""
     n = len(df)
